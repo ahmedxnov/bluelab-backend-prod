@@ -1,0 +1,8 @@
+{
+  "note": "Surviving invariant-path mutants (quality/01 \u00a74). A surviving mutant is a missing test. This number may only go down.",
+  "unkilled": 152,
+  "survived": 104,
+  "no_tests": 48,
+  "killed": 445,
+  "score": 0.7454
+}

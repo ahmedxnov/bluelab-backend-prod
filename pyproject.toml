@@ -1,0 +1,323 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bluelab-backend"
+version = "0.0.0"
+description = "BlueLab v1 — application plane and work plane (ADR-0002, ADR-0012, ADR-0071)"
+requires-python = "==3.12.*"
+license = { text = "Proprietary" }
+
+# The application plane: FastAPI + SQLAlchemy 2 + Alembic + Pydantic v2 (ADR-0012).
+# Versions are pinned in the lockfile, and the lockfile digest is verified in the
+# build (pipeline/02 §4.2). Nothing here is host-specific — the extension
+# allowlist is empty and the schema must stay portable (data/04 §8).
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "pydantic[email]>=2",           # EmailStr — api/openapi.yaml specifies format: email
+  "pydantic-settings",
+  "sqlalchemy>=2",
+  "alembic",                      # one linear lineage, forward-only (data/04 §1)
+  "asyncpg",
+  "psycopg[binary]",              # migrations + the sync tooling paths
+  "procrastinate",                # C-12 — transactional enqueue (ADR-0023)
+  "argon2-cffi",                  # C-18 — argon2id (ADR-0028)
+  "valkey",                       # C-13 — sessions, leases, registry (ADR-0024)
+  "boto3",                        # C-11 object store + C-14 SES + C-17 secrets
+  "httpx",
+  "tenacity",                     # timeouts + backoff on every external call
+  "structlog",
+  "uuid-utils",                   # UUIDv7, minted application-side (ADR-0030)
+  "python-multipart",
+  "livekit-api",                  # C-1 — tokens, egress, webhook verification
+  "anthropic",                    # C-6 evaluator / C-7 generation (ADR-0018)
+  "azure-ai-documentintelligence",# C-8 — extraction (ADR-0020)
+  "playwright",                   # C-9 — Chromium PDF render (ADR-0021)
+  "opentelemetry-sdk",            # C-16 (ADR-0027)
+  "opentelemetry-exporter-otlp",
+  "opentelemetry-instrumentation-fastapi",
+  "opentelemetry-instrumentation-sqlalchemy",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
+  "hypothesis",                   # property tests for the V-1…V-11 formulas (L1)
+  "fakeredis",                    # the L3 auth suite's coordination store (see its conftest)
+  "mutmut",                       # mutation testing, invariant paths only (quality/01 §4)
+  "schemathesis",                 # L2 contract validation
+  "ruff",
+  "mypy",
+  "import-linter",                # the ADR-0012 module-boundary lint — build-failing
+  "detect-secrets",               # SEC-019 (pipeline/02 §2 row 9)
+  "pyyaml",                       # tools/check_conformance_diff.py reads api/openapi.yaml
+]
+
+[project.scripts]
+bluelab-api = "bluelab.entrypoints.api:main"
+bluelab-worker = "bluelab.entrypoints.worker:main"
+bluelab-sweeper = "bluelab.entrypoints.sweeper:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bluelab", "src/bluelab_runtime_bundle"]
+
+# ---------------------------------------------------------------------------
+# The module-boundary lint (ADR-0012, ADR-0002).
+#
+# "Module boundaries inside one process are a discipline, not a physical
+# constraint, and erode unless enforced" — ADR-0002. These contracts are what
+# makes cross-module reach into another module's stored state a BUILD FAILURE
+# rather than a review finding. Commit gate stage 1 (pipeline/02 §2).
+#
+# Cross-module FOREIGN KEYS are legal and used freely (data/00 §4). It is
+# cross-module CODE REACH that is forbidden. Callers enter through `service.py`.
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = ["bluelab", "bluelab_runtime_bundle"]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "The planes are layered"
+type = "layers"
+layers = [
+  "bluelab.entrypoints",
+  "bluelab.api",
+  "bluelab.calls",
+  "bluelab.work",
+  "bluelab.modules",
+  "bluelab.notifications",
+  "bluelab.adapters",
+  "bluelab.platform",
+]
+
+[[tool.importlinter.contracts]]
+name = "Privileged scope is unreachable from the product surface"
+type = "forbidden"
+source_modules = ["bluelab.modules", "bluelab.notifications"]
+forbidden_modules = ["bluelab.platform.db.privileged"]
+# system scope reaches every row in an org; ops scope carries no org at all.
+# The legitimate callers are the worker context, the signed internal seam, and
+# ops-session resolution in bluelab.api.deps — never a domain module.
+
+[[tool.importlinter.contracts]]
+name = "Only the bundle builder may touch the call-plane contract package"
+type = "forbidden"
+source_modules = ["bluelab.modules", "bluelab.work", "bluelab.notifications", "bluelab.api"]
+forbidden_modules = ["bluelab_runtime_bundle"]
+
+[[tool.importlinter.contracts]]
+name = "identity: no cross-module reach into stored state"
+type = "forbidden"
+source_modules = [
+  "bluelab.modules.knowledge", "bluelab.modules.drills", "bluelab.modules.review",
+  "bluelab.modules.training", "bluelab.modules.hiring", "bluelab.modules.assessment",
+  "bluelab.modules.operations",
+]
+forbidden_modules = ["bluelab.modules.identity.models", "bluelab.modules.identity.router"]
+
+[[tool.importlinter.contracts]]
+name = "knowledge: no cross-module reach into stored state"
+type = "forbidden"
+source_modules = [
+  "bluelab.modules.identity", "bluelab.modules.drills", "bluelab.modules.review",
+  "bluelab.modules.training", "bluelab.modules.hiring", "bluelab.modules.assessment",
+  "bluelab.modules.operations",
+]
+forbidden_modules = ["bluelab.modules.knowledge.models", "bluelab.modules.knowledge.router"]
+
+[[tool.importlinter.contracts]]
+name = "drills: no cross-module reach into stored state"
+type = "forbidden"
+source_modules = [
+  "bluelab.modules.identity", "bluelab.modules.knowledge", "bluelab.modules.review",
+  "bluelab.modules.training", "bluelab.modules.hiring", "bluelab.modules.assessment",
+  "bluelab.modules.operations",
+]
+forbidden_modules = ["bluelab.modules.drills.models", "bluelab.modules.drills.router"]
+
+[[tool.importlinter.contracts]]
+name = "review: no cross-module reach into stored state"
+type = "forbidden"
+source_modules = [
+  "bluelab.modules.identity", "bluelab.modules.knowledge", "bluelab.modules.drills",
+  "bluelab.modules.training", "bluelab.modules.hiring", "bluelab.modules.assessment",
+  "bluelab.modules.operations",
+]
+forbidden_modules = ["bluelab.modules.review.models", "bluelab.modules.review.router"]
+
+[[tool.importlinter.contracts]]
+name = "training: no cross-module reach into stored state"
+type = "forbidden"
+source_modules = [
+  "bluelab.modules.identity", "bluelab.modules.knowledge", "bluelab.modules.drills",
+  "bluelab.modules.review", "bluelab.modules.hiring", "bluelab.modules.assessment",
+  "bluelab.modules.operations",
+]
+forbidden_modules = ["bluelab.modules.training.models", "bluelab.modules.training.router"]
+
+[[tool.importlinter.contracts]]
+name = "hiring: no cross-module reach into stored state"
+type = "forbidden"
+source_modules = [
+  "bluelab.modules.identity", "bluelab.modules.knowledge", "bluelab.modules.drills",
+  "bluelab.modules.review", "bluelab.modules.training", "bluelab.modules.assessment",
+  "bluelab.modules.operations",
+]
+forbidden_modules = ["bluelab.modules.hiring.models", "bluelab.modules.hiring.router"]
+
+[[tool.importlinter.contracts]]
+name = "assessment: no cross-module reach into stored state"
+type = "forbidden"
+source_modules = [
+  "bluelab.modules.identity", "bluelab.modules.knowledge", "bluelab.modules.drills",
+  "bluelab.modules.review", "bluelab.modules.training", "bluelab.modules.hiring",
+  "bluelab.modules.operations",
+]
+forbidden_modules = ["bluelab.modules.assessment.models", "bluelab.modules.assessment.router"]
+
+[[tool.importlinter.contracts]]
+name = "operations: no cross-module reach into stored state"
+type = "forbidden"
+source_modules = [
+  "bluelab.modules.identity", "bluelab.modules.knowledge", "bluelab.modules.drills",
+  "bluelab.modules.review", "bluelab.modules.training", "bluelab.modules.hiring",
+  "bluelab.modules.assessment",
+]
+forbidden_modules = ["bluelab.modules.operations.models", "bluelab.modules.operations.router"]
+
+# ---------------------------------------------------------------------------
+# Test wiring. Every test carries a traceability tag; the coverage check
+# (tools/check_requirement_coverage.py) fails the build on any requirement with
+# no tagged, NON-SKIPPED test — a placeholder counts as uncovered (ADR-0062).
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# src-layout: the package is not installed during a bare `pytest`, so point the
+# import path at it explicitly rather than relying on an editable install.
+pythonpath = ["src", "."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+# The TEST loop scope must match the fixture loop scope. With per-test loops, a
+# session-scoped engine ends up bound to the loop that created it and every test
+# raises "attached to a different loop" — which is what the first real run did.
+asyncio_default_test_loop_scope = "session"
+markers = [
+  "l1_unit: pure logic, no I/O",
+  "l2_contract: against the Prism mock / the generated contract",
+  "l3_integration: real postgres:16",
+  "l6_load: k6-driven, tier gates only",
+  "l7_security: attack the invariants",
+  "l8_resilience: the degradation ladder and the restore drill",
+  "l9_grading: grading-validity instruments",
+  "invariant_path: mutation-tested band (quality/01 §4) — isolation, concealment, consent, T-1…T-9, freeze guards, admission, grading arithmetic, erasure",
+  "build_gate: tests the gate scripts in tools/ themselves — excluded from the mutation run, which relocates the tree out from under their imports",
+  "verifies(ids): traceability tag — the FR/NFR/CMP/SEC ids this test verifies",
+]
+
+[tool.coverage.run]
+source = ["src/bluelab"]
+branch = true
+# SQLAlchemy's asyncio layer runs the DB round trip inside a greenlet
+# (`greenlet_spawn`). Without this, coverage stops tracing at the switch and every
+# line AFTER an `await session.execute(...)` reports as unexecuted — including
+# lines a passing test demonstrably ran. `gates.py` read 59% while a test asserted
+# on the output of a line inside the "uncovered" block.
+#
+# The effect is silent and it points the wrong way: it invents gaps rather than
+# hiding them, so anyone reading the report to decide what to test next chases
+# lines that are already covered. `"thread"` stays because pytest and the engine
+# pool both use threads.
+concurrency = ["greenlet", "thread"]
+
+[tool.ruff]
+target-version = "py312"
+src = ["src", "tests", "tools"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tools"]
+
+# PyYAML ships no inline types and the stub package is a separate distribution.
+# Narrowed to the one module that imports it — `tools/check_conformance_diff.py`
+# reads api/openapi.yaml — rather than set `ignore_missing_imports` globally,
+# which would silence a genuinely missing dependency anywhere in the tree.
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true
+
+# ── Mutation testing — the invariant band only (quality/01 §4, ADR-0059) ──────
+#
+# "A surviving mutant is a missing test." The bar applies to the INVARIANT PATHS
+# and to their APPLICATION-LAYER code only; the database-layer invariants (RLS
+# policies, freeze/decision triggers, the transcript guard) sit in SQL that a
+# Python mutation tool cannot reach, and are guarded instead by the L3 attack
+# suite plus the generate-and-diff drift check (data/04 §3).
+#
+# `only_mutate` is an explicit file list rather than a directory glob, because the
+# band is a policy decision from quality/01 §4 and not a property of the tree.
+# Every entry below is one of the nine invariant transactions, the scope filter
+# that makes isolation work, or the denial semantics that make a cross-scope read
+# indistinguishable from absence.
+#
+# mutmut runs on POSIX only (it refuses on native Windows), so these patterns use
+# forward slashes deliberately — they are matched with fnmatch against the path
+# string as it appears on the CI runner.
+[tool.mutmut]
+source_paths = ["src"]
+only_mutate = [
+    # The nine invariant transactions, T-1…T-9
+    "src/bluelab/calls/admission.py",            # T-1  admission
+    "src/bluelab/calls/completion.py",           # T-2  completion
+    "src/bluelab/modules/review/grading.py",     # T-3  grading arithmetic, T-5
+    "src/bluelab/modules/knowledge/publish.py",  # T-4  publish
+    "src/bluelab/modules/drills/freeze.py",      # T-5  freeze
+    "src/bluelab/calls/interruption.py",         # T-6  interruption / allowance
+    "src/bluelab/modules/hiring/invites.py",     # T-7  — NO TEST EXISTS YET
+    "src/bluelab/modules/hiring/shortlist.py",   # T-8, T-9
+    # Isolation and scope filtering
+    "src/bluelab/platform/db/scope.py",
+    "src/bluelab/platform/db/privileged.py",
+    # Denial-as-absence (ADR-0036): the concealment surface's application half
+    "src/bluelab/platform/errors/denial.py",
+]
+# T-7 is in the list and has no `test_t7_*` anywhere — the transaction suite covers
+# t1…t6, t8, t9. Leaving it out would make the gate green by narrowing what it
+# looks at, which is the one failure mode a mutation gate must not have. Its
+# mutants survive, the baseline records that, and the number can only come down.
+
+# Both levels: L1 holds the pure-logic bars, L3 holds the transaction races and the
+# freeze guards that actually kill mutants in the code above.
+pytest_add_cli_args_test_selection = ["tests/l1_unit", "tests/l3_integration"]
+
+# Tests OF the gate scripts are excluded, and excluding them costs nothing: they
+# exercise `tools/`, which is not in the band above, so they kill no mutant here.
+#
+# They cannot run anyway. mutmut executes the suite from a relocated copy under
+# `mutants/`; those modules import the scripts by path (`parents[2] / "tools"`),
+# and the scripts in turn resolve the document set as `REPO_ROOT.parents[1]` to
+# read api/openapi.yaml and specs/. Both anchors move when the tree does. Teaching
+# every tool to locate the repo from an arbitrary working directory would be real
+# complexity bought for tests that contribute nothing to this run.
+#
+# `--ignore`, NOT `-m "not build_gate"`. The marker exists and is correct, but it
+# cannot do this job: `-m` deselects after collection, and collection *imports* the
+# module — so the ImportError fires before the marker is ever consulted. Only
+# `--ignore` keeps pytest from importing the file at all.
+#
+# The failure mode if a third tool-test is added and not listed here: mutmut
+# reports `total: 594, killed: 0, survived: 0`. `tools/check_mutation_score.py`
+# rejects that shape explicitly — mutants generated but none judged — so it surfaces
+# as exit 2 rather than as a mutation score.
+#
+# `tests/l1_unit` stays in the selection above on purpose — the V-1…V-11 formula
+# tests belong there (quality/01 §2) and will kill mutants in `review/grading.py`
+# once written.
+pytest_add_cli_args = [
+    "--ignore=tests/l1_unit/test_build_gate_tools.py",
+    "--ignore=tests/l3_integration/migrations/test_rls_drift_check.py",
+]
