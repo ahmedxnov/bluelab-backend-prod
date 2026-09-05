@@ -957,3 +957,40 @@ def test_local_runtime_and_migrations_use_different_database_roles():
 
     assert urlsplit(environment["DATABASE_URL"]).username == "bluelab_app"
     assert urlsplit(environment["MIGRATION_DATABASE_URL"]).username == "bluelab"
+
+
+def test_platform_reference_seed_is_a_fixed_data_migration():
+    """The local bootstrap must not rely on an out-of-band seed fixture.
+
+    data/04 §6 requires environment-invariant platform reference rows to live in
+    the Alembic lineage. Customer vertical data intentionally does not belong
+    here.
+    """
+    migration = (
+        BACKEND_ROOT / "migrations" / "versions" / "0003_platform_reference_seed.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'revision: str = "0003_platform_reference_seed"' in migration
+    assert 'down_revision: str | None = "0002_queue_schema"' in migration
+    assert migration.count("ON CONFLICT") == 3
+    assert "recording_consent_notice" in migration
+    assert "terms_of_use" in migration
+    assert "privacy_notice" in migration
+    assert "Budget pressure" in migration
+    assert "Protect the renewal budget" in migration
+    assert "first_call" in migration
+    assert "practice_streak" in migration
+    assert "INSERT INTO org" not in migration
+    assert "INSERT INTO product_document" not in migration
+
+
+def test_backend_bootstrap_runs_the_owned_reproducible_setup():
+    """Bootstrap includes locked dependencies, lineage, and generated SQL modules."""
+    bootstrap = (BACKEND_ROOT / "scripts" / "bootstrap_local.py").read_text(encoding="utf-8")
+
+    assert '"-m", "venv", "--upgrade-deps"' in bootstrap
+    assert '"--require-hashes", "-r", "requirements-dev.lock"' in bootstrap
+    assert '"compose", "up", "-d", "--wait"' in bootstrap
+    assert "DOCKER_BIN" in bootstrap
+    assert '"-m", "alembic", "upgrade", "head"' in bootstrap
+    assert '"tools/check_rls_drift.py", "--apply"' in bootstrap
