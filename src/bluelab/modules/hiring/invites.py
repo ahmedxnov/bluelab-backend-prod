@@ -23,7 +23,6 @@ is a support call.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import text
@@ -66,7 +65,14 @@ _HAS_STAGES = text(
 _INSERT_TOKEN = text(
     """
     insert into candidate_token (id, org_id, team_id, candidate_id, token_hash, expires_at)
-    values (:id, :org_id, :team_id, :candidate, :token_hash, :expires_at)
+    values (
+        :id,
+        :org_id,
+        :team_id,
+        :candidate,
+        :token_hash,
+        pg_catalog.now() + make_interval(days => :expiry_days)
+    )
     """
 )
 
@@ -106,8 +112,6 @@ async def send_invites(
         raise ProblemError(catalog.POSITION_CLOSED)
 
     expiry_days = (await session.execute(_EXPIRY_DAYS, {"position": position_id})).scalar_one()
-    expires_at = datetime.now(UTC) + timedelta(days=int(expiry_days))
-
     issued: list[IssuedInvite] = []
     for candidate_id in candidate_ids:
         token_id = new_id()
@@ -121,7 +125,7 @@ async def send_invites(
                 "team_id": team_id,
                 "candidate": candidate_id,
                 "token_hash": hash_token(plaintext),
-                "expires_at": expires_at,
+                "expiry_days": int(expiry_days),
             },
         )
         sent = await session.execute(

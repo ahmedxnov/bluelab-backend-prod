@@ -269,6 +269,9 @@ ignore_missing_imports = true
 # string as it appears on the CI runner.
 [tool.mutmut]
 source_paths = ["src"]
+# L1 contract-reader tests run in mutmut's relocated tree; copy the backend-owned
+# platform snapshot they read, without introducing a sibling-repository dependency.
+also_copy = ["contracts/"]
 only_mutate = [
     # The nine invariant transactions, T-1…T-9
     "src/bluelab/calls/admission.py",            # T-1  admission
@@ -277,7 +280,7 @@ only_mutate = [
     "src/bluelab/modules/knowledge/publish.py",  # T-4  publish
     "src/bluelab/modules/drills/freeze.py",      # T-5  freeze
     "src/bluelab/calls/interruption.py",         # T-6  interruption / allowance
-    "src/bluelab/modules/hiring/invites.py",     # T-7  — NO TEST EXISTS YET
+    "src/bluelab/modules/hiring/invites.py",     # T-7  — L3 transaction battery
     "src/bluelab/modules/hiring/shortlist.py",   # T-8, T-9
     # Isolation and scope filtering
     "src/bluelab/platform/db/scope.py",
@@ -285,14 +288,33 @@ only_mutate = [
     # Denial-as-absence (ADR-0036): the concealment surface's application half
     "src/bluelab/platform/errors/denial.py",
 ]
-# T-7 is in the list and has no `test_t7_*` anywhere — the transaction suite covers
-# t1…t6, t8, t9. Leaving it out would make the gate green by narrowing what it
-# looks at, which is the one failure mode a mutation gate must not have. Its
-# mutants survive, the baseline records that, and the number can only come down.
+# T-7 stays in the invariant band with its dedicated L3 transaction battery. Leaving
+# it out would make the gate green by narrowing what it looks at, which is the one
+# failure mode a mutation gate must not have. Its remaining mutants stay recorded
+# in the baseline, and the number can only come down.
 
 # Both levels: L1 holds the pure-logic bars, L3 holds the transaction races and the
 # freeze guards that actually kill mutants in the code above.
-pytest_add_cli_args_test_selection = ["tests/l1_unit", "tests/l3_integration"]
+pytest_add_cli_args_test_selection = [
+    "-p",
+    "no:hypothesispytest",
+    "-p",
+    "no:schemathesis",
+    "--ignore=tests/l1_unit/test_build_gate_tools.py",
+    "--ignore=tests/l3_integration/migrations/test_rls_drift_check.py",
+    "tests/l1_unit",
+    "tests/l3_integration",
+]
+
+# Keep each mutation subprocess on the documented L1/L3 pytest plugin settings.
+# The selection list is also used for mutmut's initial `--collect-only` pass;
+# its general argument list is applied only once it has selected concrete tests.
+pytest_add_cli_args = [
+    "-p",
+    "no:hypothesispytest",
+    "-p",
+    "no:schemathesis",
+]
 
 # Tests OF the gate scripts are excluded, and excluding them costs nothing: they
 # exercise `tools/`, which is not in the band above, so they kill no mutant here.
@@ -307,7 +329,9 @@ pytest_add_cli_args_test_selection = ["tests/l1_unit", "tests/l3_integration"]
 # `--ignore`, NOT `-m "not build_gate"`. The marker exists and is correct, but it
 # cannot do this job: `-m` deselects after collection, and collection *imports* the
 # module — so the ImportError fires before the marker is ever consulted. Only
-# `--ignore` keeps pytest from importing the file at all.
+# `--ignore` keeps pytest from importing the file at all. They sit in
+# `pytest_add_cli_args_test_selection`, rather than only the general argument
+# list: mutmut performs its initial collection from that list alone.
 #
 # The failure mode if a third tool-test is added and not listed here: mutmut
 # reports `total: 594, killed: 0, survived: 0`. `tools/check_mutation_score.py`
@@ -317,7 +341,3 @@ pytest_add_cli_args_test_selection = ["tests/l1_unit", "tests/l3_integration"]
 # `tests/l1_unit` stays in the selection above on purpose — the V-1…V-11 formula
 # tests belong there (quality/01 §2) and will kill mutants in `review/grading.py`
 # once written.
-pytest_add_cli_args = [
-    "--ignore=tests/l1_unit/test_build_gate_tools.py",
-    "--ignore=tests/l3_integration/migrations/test_rls_drift_check.py",
-]

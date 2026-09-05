@@ -41,7 +41,6 @@ dangerous outcome available to this suite.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -224,14 +223,12 @@ async def _seed(session: AsyncSession, i: dict[str, UUID]) -> None:
             "insert into drill (id, org_id, team_id, author_account_id, self_authored, status,"
             " call_type, lead_type, label, scenario, answer_key, published_at)"
             " values (:id, :org, :team, :author, :sa, :status, 'discovery', 'referral',"
-            "         :label, :scen, :ak, :pub)",
+            "         :label, :scen, :ak, case when :frozen then pg_catalog.now() end)",
             id=did, org=org, team=team, author=author, sa=self_authored, status=status,
             label="A buyer" if frozen else None,
             scen='{"v": 1}' if frozen else None,
             ak='{"v": 1}' if frozen else None,
-            # A real datetime, not the string "now()" — the driver binds this as a
-            # timestamptz parameter and will not parse SQL out of a value.
-            pub=datetime.now(UTC) if frozen else None,
+            frozen=frozen,
         )
         await ex(
             "insert into drill_concealed (drill_id, org_id, team_id, challenges, hidden_motives)"

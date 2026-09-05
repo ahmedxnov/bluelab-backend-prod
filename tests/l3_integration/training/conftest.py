@@ -28,7 +28,7 @@ import json
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from uuid import UUID
 
 import fakeredis.aioredis
@@ -133,22 +133,22 @@ async def world(training_engine) -> AsyncIterator[World]:
     assignments = {k: new_id() for k in ("renewal", "discovery")}
     feedback = {k: new_id() for k in ("old", "new", "other")}
 
-    now = datetime.now(UTC)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    month_elapsed = now - month_start
-
-    def this_month(age_rank: int) -> datetime:
-        """Preserve relative age while keeping every attempt in this UTC month.
-
-        Fixed `now() - N days` offsets cross into the previous month when this
-        suite runs near the first of the month. Ten ordered slices of the elapsed
-        month keep the intended oldest/newest relationships, never create a
-        future attempt, and remain inside the trailing-30-day progress window.
-        """
-        return now - month_elapsed * (age_rank / 10)
-
     maker = async_sessionmaker(training_engine, expire_on_commit=False)
     async with maker() as s, s.begin():
+        now = (await s.execute(text("select pg_catalog.now()"))).scalar_one()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_elapsed = now - month_start
+
+        def this_month(age_rank: int) -> datetime:
+            """Keep attempts in the current database UTC month.
+
+            Fixed offsets from the host clock can cross a month boundary. The
+            database clock defines both the fixture values and the SQL readers,
+            so ten elapsed-month slices retain their order without relying on
+            host or session-timezone agreement.
+            """
+            return now - month_elapsed * (age_rank / 10)
+
         await s.execute(
             text("insert into org (id, name, timezone) values (:id, 'Training Org', 'UTC')"),
             {"id": ids["org"]},

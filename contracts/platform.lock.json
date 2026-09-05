@@ -1,8 +1,8 @@
 {
   "version": 1,
   "source_repository": "https://github.com/ahmedxnov/bluelab-platform.git",
-  "source_commit": "2fda0e7d9a92e4e8e9354c41d3d11539222b1533",
-  "source_state": "repository-split working-tree amendment 2026-09-05; exact authority is the per-file SHA-256",
+  "source_commit": "5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb",
+  "source_state": "repository snapshot at the recorded source commit; exact authority is the per-file SHA-256",
   "snapshot_root": "contracts/platform",
   "files": {
     "api/02-async-internal-contracts.api.md": "8e8338c49664a229709f00fec3e4f416da595a8a9ca36171784a38e51c7ce0c2",

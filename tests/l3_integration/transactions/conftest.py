@@ -16,7 +16,6 @@ design and a shared fixture would make them order-dependent (quality/01 §4).
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -79,7 +78,7 @@ def make_drill(session, base_org):
                     "insert into drill (id, org_id, team_id, author_account_id, self_authored,"
                     " status, call_type, lead_type, label, scenario, answer_key, published_at)"
                     " values (:id, :org, :team, :team, :sa, :status, 'discovery', 'referral',"
-                    "         :label, :scen, :ak, :pub)"
+                    "         :label, :scen, :ak, case when :frozen then pg_catalog.now() end)"
                 ),
                 {
                     "id": drill_id, "org": base_org["org"], "team": base_org["manager"],
@@ -87,7 +86,7 @@ def make_drill(session, base_org):
                     "label": "Buyer" if frozen else None,
                     "scen": '{"v": 1}' if frozen else None,
                     "ak": '{"v": 1}' if frozen else None,
-                    "pub": datetime.now(UTC) if frozen else None,
+                    "frozen": frozen,
                 },
             )
             await session.execute(
@@ -113,11 +112,12 @@ def make_position(session, base_org):
                 text(
                     "insert into position (id, org_id, team_id, title, openings, status,"
                     " assessment_frozen_at)"
-                    " values (:id, :org, :team, 'AE', 1, 'active', :frozen)"
+                    " values (:id, :org, :team, 'AE', 1, 'active',"
+                    "         case when :frozen then pg_catalog.now() end)"
                 ),
                 {
                     "id": position_id, "org": base_org["org"], "team": base_org["manager"],
-                    "frozen": datetime.now(UTC) if frozen else None,
+                    "frozen": frozen,
                 },
             )
         return position_id

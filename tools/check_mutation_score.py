@@ -12,11 +12,11 @@ build may proceed.
 
 ## Why this exists rather than just trusting mutmut's exit code
 
-mutmut exits non-zero whenever *any* mutant survives, and on a part-built product
-that is every run — T-7 has no test at all, so every mutant in `invites.py`
-survives by construction. A gate that is red on every commit is one the team
-learns to merge through, which is worse than no gate. So the surviving count
-ratchets: it may fall freely, it may never rise.
+mutmut exits non-zero whenever *any* mutant survives, and a part-built product
+will have survivors even after its dedicated transaction batteries land. A gate
+that is red on every commit is one the team learns to merge through, which is
+worse than no gate. So the surviving count ratchets: it may fall freely, it may
+never rise.
 
 ## Why a count, and not a named set like the other two ratchets
 

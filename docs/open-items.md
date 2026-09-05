@@ -2,9 +2,9 @@
 
 The register for everything deferred, undecided, or routed upstream. Same
 convention the platform repository uses
-([api/README](https://github.com/ahmedxnov/bluelab-platform/blob/2fda0e7d9a92e4e8e9354c41d3d11539222b1533/api/README.md),
-[infra/README](https://github.com/ahmedxnov/bluelab-platform/blob/2fda0e7d9a92e4e8e9354c41d3d11539222b1533/infra/README.md),
-[stack/00 §7](https://github.com/ahmedxnov/bluelab-platform/blob/2fda0e7d9a92e4e8e9354c41d3d11539222b1533/stack/00-selection-overview.stack.md)):
+([api/README](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/api/README.md),
+[infra/README](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/infra/README.md),
+[stack/00 §7](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/stack/00-selection-overview.stack.md)):
 an item is closed when the artifact that owns it says so, not when it feels done.
 
 **This file is the backlog. A commit message is not.** Anything discovered during
@@ -109,10 +109,10 @@ env-var typos and wrong for a shared dotenv. Both are defensible; pick one.
 ### OI-4 · The Tier-1 object store is unowned
 **Status:** owner · **Raised:** stack coverage check
 
-C-11's *launch* implementation was **Supabase Storage** ([stack/00 §9](https://github.com/ahmedxnov/bluelab-platform/blob/2fda0e7d9a92e4e8e9354c41d3d11539222b1533/stack/00-selection-overview.stack.md)).
+C-11's *launch* implementation was **Supabase Storage** ([stack/00 §9](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/stack/00-selection-overview.stack.md)).
 Amendment B (owner, 2026-07-24) put the rollout on RDS at T1, so Supabase is
 never provisioned — and nothing then answers what serves the object store at T1.
-The T1 compose list in [infra/01 §7](https://github.com/ahmedxnov/bluelab-platform/blob/2fda0e7d9a92e4e8e9354c41d3d11539222b1533/infra/01-topology-and-networking.infra.md)
+The T1 compose list in [infra/01 §7](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/infra/01-topology-and-networking.infra.md)
 is `caddy · app · work · call-agent · valkey · backup(cron)`: no MinIO, and no S3
 bucket named.
 
@@ -217,7 +217,7 @@ before it — are **unverified, not verified-good**.
 What *is* established for `/me/library`: the universe is a `UNION ALL` rather than
 an `OR`, so each branch can reach its own index (`idx_drill_team_status` /
 `idx_drill_author_self`, both named in
-[data/02 §2](https://github.com/ahmedxnov/bluelab-platform/blob/2fda0e7d9a92e4e8e9354c41d3d11539222b1533/data/02-query-patterns-and-indexes.data.md)). Confirmed
+[data/02 §2](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/data/02-query-patterns-and-indexes.data.md)). Confirmed
 reachable by forcing `enable_seqscan = off`. Reachable is not chosen — at six
 rows the planner has no reason to prefer either, and that is the whole point of
 this item.
@@ -234,7 +234,7 @@ Needs the L6 load suite (zero files today) with a realistically-sized org.
 ## Verify before first real use
 
 ### OI-9 · The Procrastinate table shape is unpinned
-**Status:** verify · **Source:** banked DoD item, [quality/08 §4](https://github.com/ahmedxnov/bluelab-platform/blob/2fda0e7d9a92e4e8e9354c41d3d11539222b1533/quality/08-definition-of-done-and-the-build-loop.quality.md), data **F-9**
+**Status:** verify · **Source:** banked DoD item, [quality/08 §4](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/quality/08-definition-of-done-and-the-build-loop.quality.md), data **F-9**
 
 `platform/queue/enqueue.py` writes `procrastinate_jobs` directly, because
 `defer()` manages its own connection and would break the single commit ADR-0023

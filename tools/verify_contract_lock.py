@@ -8,7 +8,7 @@ import json
 import re
 import sys
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCK = REPO_ROOT / "contracts" / "platform.lock.json"
@@ -17,7 +17,10 @@ _COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
 
 def load_lock(path: Path = LOCK) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise TypeError("contract lock must be an object")
+    data = cast(dict[str, Any], raw)
     if data.get("version") != 1:
         raise ValueError("contract lock version must be 1")
     if not _COMMIT.fullmatch(str(data.get("source_commit", ""))):

@@ -741,15 +741,7 @@ async def test_t7_persists_only_the_token_hash(session, base_org, make_assessmen
 
 @pytest.mark.verifies("FR-HIR-004")
 async def test_t7_expiry_follows_the_positions_own_window(session, base_org, make_assessment):
-    """The window comes from the position, not from a constant.
-
-    One mutant here is **equivalent and cannot be killed**: `datetime.now(UTC)` →
-    `datetime.now(None)`. The naive value lands in a `timestamptz` column and is
-    read in the session's TimeZone, which on both this box and CI matches the
-    process's own — so the two expressions store the identical instant. Do not
-    contort this test chasing it. It is still worth keeping `UTC` explicit: the
-    equivalence holds only while those two zones agree, and nothing enforces that.
-    """
+    """The expiry window comes from the position's database-clock interval."""
     position, candidates = await make_assessment()
     async with session.begin():
         await session.execute(
@@ -759,11 +751,8 @@ async def test_t7_expiry_follows_the_positions_own_window(session, base_org, mak
     async with session.begin():
         issued = await _invite(position, base_org["org"], base_org["manager"], candidates)(session)
 
-    # Compared against the DATABASE's clock, and to within an hour rather than to
-    # the nearest day. Rounding to days would accept a naive `datetime.now()` —
-    # local time written into a timestamptz column, which on this box is three
-    # hours adrift. An hour is still orders of magnitude above the host/WSL clock
-    # skew that makes tighter timestamp assertions flaky here.
+    # Both values derive from PostgreSQL's transaction clock, so this is an
+    # implementation assertion, not a tolerance for host/WSL clock skew.
     drift = (
         await session.execute(
             text(
@@ -773,7 +762,7 @@ async def test_t7_expiry_follows_the_positions_own_window(session, base_org, mak
             {"t": issued[0].token_id},
         )
     ).scalar_one()
-    assert float(drift) < 3600, f"expiry is {float(drift) / 3600:.1f}h from the position's window"
+    assert float(drift) < 1, f"expiry is {float(drift):.3f}s from the position's window"
 
 
 @pytest.mark.verifies("FR-IDA-012")
