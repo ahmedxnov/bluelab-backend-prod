@@ -35,7 +35,7 @@ Two facts make it decisive rather than merely preferable:
 
 Authentication on the three internal endpoints is `X-Agent-Signature`, HMAC-SHA256,
 verified constant-time, failing closed — **over a canonical string, not the bare
-body.** See the route-back below.
+body.** See the ratified amendment below.
 
 **No turn-path cost.** The seam is crossed at session start and at call end, never
 inside a turn — so `NFR-001` is untouched.
@@ -64,13 +64,12 @@ optional** (ADR-0071 rule 7): together they are what guarantees no attempt is
 stranded `in_progress`. They need genuine L8 resilience coverage — an exercised
 path, not a theoretical one.
 
-## Route-back — the signature must bind the request, not just the body
+## Ratified signature amendment — bind the whole request
 
-**Raised by the platform security pass. Amends `api/02 §1.2` and ADR-0071
-decision 2. Needs owner sign-off.**
+**Accepted 2026-09-05; reflected in `api/02 §1.2` and ADR-0071 decision 2.**
 
-Both documents specify *"HMAC-SHA256 over the exact raw body"*. That is
-exploitable as written:
+Both documents formerly specified *"HMAC-SHA256 over the exact raw body"*. That
+was exploitable as written:
 
 - `GET /internal/calls/{call_id}/bundle` is specified with an **empty body**, so
   its signature is `HMAC(secret, b"")` — **a constant**, identical for every
@@ -101,22 +100,18 @@ is keyed on the call and grade-once is `scorecard.attempt_id` unique (T-3), so a
 replayed completion is a no-op. A nonce store would duplicate a schema guarantee
 and put state on the admission path.
 
-Implemented in `platform/security/agent_signature.py`. The agent's
-`signing.py` must mirror it — and the agent is changing anyway, per the open item
-below, so this costs nothing extra to land in the same pass.
+Implemented in `platform/security/agent_signature.py` and mirrored in the agent's
+`signing.py`; both repositories carry deterministic vectors for the canonical bytes.
 
-## Open item — the deployed agent does not yet match the contract
+## Reconciled agent seam
 
-`Implementation/bluelab-agent-prod` currently calls:
+`bluelab-agent-prod` now calls:
 
 ```
-GET  /v1/internal/attempts/{id}/runtime-bundle
-POST /v1/callbacks/agent/transcript          ← streams per segment, during the call
-POST /v1/callbacks/agent/attempt-complete
+GET  /internal/calls/{call_id}/bundle
+POST /internal/calls/{call_id}/completion   ← whole buffered transcript, once
+POST /internal/calls/{call_id}/interruption
 ```
 
-api/02 §1.2 and ADR-0071 supersede **both** the paths and the streaming. ADR-0071
-is explicit that the isolation is adopted and the streaming is not. The seam must
-be reconciled on the contract's terms — three endpoints, transcript delivered once
-with completion — before the first real call. Until then this is a known divergence
-between the two deployment units, not a design choice.
+The body and path use `call_id`, so test calls (which have no `attempt_id`) use the same seam. The
+completion and interruption payloads are closed in the locked `api/02` snapshot.

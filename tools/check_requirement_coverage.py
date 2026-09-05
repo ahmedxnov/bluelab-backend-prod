@@ -41,13 +41,15 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BUILD_ROOT = REPO_ROOT.parents[1]
+CONTRACT_ROOT = REPO_ROOT / "contracts" / "platform"
+CONTRACT_LOCK = REPO_ROOT / "contracts" / "platform.lock.json"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _ratchet
@@ -55,9 +57,9 @@ import _ratchet
 TESTS = REPO_ROOT / "tests"
 BASELINE = "check-requirement-coverage"
 
-SPEC_NFR_CMP = BUILD_ROOT / "specs" / "01-nfr-and-compliance.spec.md"
-SPEC_SEC = BUILD_ROOT / "specs" / "02-security-requirements.spec.md"
-API_FR_COVERAGE = BUILD_ROOT / "api" / "06-fr-coverage.api.md"
+SPEC_NFR_CMP = CONTRACT_ROOT / "specs" / "01-nfr-and-compliance.spec.md"
+SPEC_SEC = CONTRACT_ROOT / "specs" / "02-security-requirements.spec.md"
+API_FR_COVERAGE = CONTRACT_ROOT / "api" / "06-fr-coverage.api.md"
 
 _HEADING = re.compile(r"^###\s+((?:NFR|CMP|SEC)-\d{3})\b", re.MULTILINE)
 """`### SEC-041: Launch data-layer network restriction` — the declaration form in
@@ -68,9 +70,6 @@ _FR_ROW = re.compile(r"^\|\s*(FR-[A-Z]{3}-\d{3})\s*\|", re.MULTILINE)
 
 _AC_HEADING = re.compile(r"^###\s+(AC-[A-Z]{3}-\d{3})\b", re.MULTILINE)
 """`### AC-IDA-006: Cross-org denial` in the feature specs."""
-
-_ADR_FILE = re.compile(r"^(\d{4})-")
-"""`adr/0031-rls-generated-from-scope-model.md` → ADR-0031."""
 
 SKIP_MARKS = frozenset({"skip", "skipif", "xfail"})
 """ADR-0062's rule, mechanised. `xfail` is included deliberately: until it starts
@@ -139,13 +138,13 @@ def citable() -> frozenset[str]:
     same defect — evidence pointing at nothing.
     """
     known = set(declared())
-    for path in sorted((BUILD_ROOT / "specs").glob("*.spec.md")):
+    for path in sorted((CONTRACT_ROOT / "specs").glob("*.spec.md")):
         known.update(_AC_HEADING.findall(path.read_text(encoding="utf-8")))
-    for adr_dir in sorted(BUILD_ROOT.glob("*/adr")):
-        for path in adr_dir.glob("*.md"):
-            match = _ADR_FILE.match(path.name)
-            if match:
-                known.add(f"ADR-{match.group(1)}")
+    lock = json.loads(CONTRACT_LOCK.read_text(encoding="utf-8"))
+    adr_ids = lock.get("citable_adr_ids")
+    if not isinstance(adr_ids, list) or not all(isinstance(item, str) for item in adr_ids):
+        raise ValueError("platform.lock.json: citable_adr_ids must be a string list")
+    known.update(adr_ids)
     return frozenset(known)
 
 

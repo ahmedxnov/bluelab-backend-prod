@@ -34,21 +34,16 @@ Headings, real table semantics, and `lang` tags in the template are what the PDF
 accessibility comes from. Tagged-PDF fidelity is verified at Phase 14 with the
 same template snapshot tests (ux/06 §5).
 
-## The open seam: where the tokens come from
+## The pinned token seam
 
 ADR-0042 is explicit that tokens are declared **once**, as CSS custom properties,
 and consumed by both the SPA and these templates — *"one token source styles SPA
 and PDF, so the report's on-screen and printed forms stay visually kin without
 duplicated style constants."*
 
-That source is `bluelab-frontend/src/styles/theme.css`, in the other repository.
-**How it reaches this template is not decided anywhere in the documents** — the
-candidates are a build-time copy, a published tokens package, or a generated CSS
-artifact committed here.
-
-This scaffold does not pick one, because picking it silently would be exactly the
-kind of cross-repo coupling that later surprises someone. What it does record is
-the failure mode being avoided: **a hand-maintained second copy of the palette.**
-The moment the PDF has its own hex values, the banding triple can drift between
-the screen and the printed report — and the report is the artifact that goes to HR
-and defends a hiring decision (CMP-003).
+The frontend repository exports `src/styles/theme.css` as its versioned token
+artifact. This repository vendors that artifact at `report/design-tokens.css` and
+records the frontend source repository, source commit, source path, and SHA-256 in
+`report/design-tokens.lock.json`. `python tools/verify_design_tokens.py` fails if
+the local bytes drift. Updating the tokens is an explicit reviewed copy-and-lock
+change; builds never read a sibling checkout or network location.

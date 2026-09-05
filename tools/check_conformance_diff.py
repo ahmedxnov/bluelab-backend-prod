@@ -39,11 +39,8 @@ C-2 requires, rather than after the surface is complete.
    a status is part of it.
 2. **The operation set** — `api/openapi.yaml` against the FastAPI app's generated
    schema, keyed on `(METHOD, path)` with the operationId checked alongside.
-3. **The TypeScript client** — generated from the contract in CI, never hand-written
-   (ADR-0013). Reported as not-run until the frontend toolchain is installed; see
-   `_typescript_client`. It is reported rather than skipped silently, because a
-   check that quietly stops checking is the failure mode this whole file exists to
-   prevent.
+The TypeScript client is generated and checked in `bluelab-frontend-prod`; this
+repository neither reads nor requires a sibling checkout.
 
 ## Exit codes
 
@@ -66,15 +63,14 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BUILD_ROOT = REPO_ROOT.parents[1]
+CONTRACT_ROOT = REPO_ROOT / "contracts" / "platform"
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _ratchet
 
-CONTRACT = BUILD_ROOT / "api" / "openapi.yaml"
-ERROR_CATALOG = BUILD_ROOT / "api" / "03-error-catalog.api.md"
-FRONTEND = BUILD_ROOT / "Implementation" / "bluelab-frontend"
+CONTRACT = CONTRACT_ROOT / "api" / "openapi.yaml"
+ERROR_CATALOG = CONTRACT_ROOT / "api" / "03-error-catalog.api.md"
 
 APP_MODULE = "bluelab.entrypoints.api"
 APP_FACTORY = "create_app"
@@ -328,41 +324,6 @@ def check_operations() -> Result:
     return Result(contradictions, gaps, notes)
 
 
-# ── 3. the generated TypeScript client ────────────────────────────────────────
-
-
-def _typescript_client() -> Result:
-    """The client is generated from the contract in CI, never hand-written.
-
-    Nothing here to diff *yet*: `bluelab-frontend` has no `node_modules`, so the
-    generator cannot run, and `src/api/` holds docstring scaffold with no committed
-    generated artifact to compare against. Once the frontend toolchain is installed
-    this grows a real comparison — regenerate from `api/openapi.yaml` and diff
-    against what is committed.
-
-    Reported as not-run rather than skipped in silence. C-2 covers schema *and*
-    client, so a summary that did not mention this would overstate what the gate
-    verified — and quietly reduced scope is precisely how a green build stops
-    meaning anything.
-    """
-    if (FRONTEND / "node_modules").is_dir():
-        return Result(
-            [],
-            set(),
-            ["TypeScript client: frontend toolchain present — regeneration diff not implemented"],
-        )
-    return Result(
-        [],
-        set(),
-        [
-            (
-                "TypeScript client: NOT CHECKED — bluelab-frontend has no node_modules, "
-                "so the generator cannot run. C-2 is not fully closed until it does."
-            )
-        ],
-    )
-
-
 # ── driver ────────────────────────────────────────────────────────────────────
 
 
@@ -370,7 +331,7 @@ def run() -> tuple[list[Finding], set[str], list[str]]:
     contradictions: list[Finding] = []
     gaps: set[str] = set()
     notes: list[str] = []
-    for result in (check_problems(), check_operations(), _typescript_client()):
+    for result in (check_problems(), check_operations()):
         contradictions.extend(result.contradictions)
         gaps.update(result.gaps)
         notes.extend(result.notes)
@@ -379,7 +340,7 @@ def run() -> tuple[list[Finding], set[str], list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Diff the server and the generated client against api/openapi.yaml."
+        description="Diff the server against the locked platform OpenAPI snapshot."
     )
     parser.add_argument(
         "--update-baseline",

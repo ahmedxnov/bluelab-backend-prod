@@ -6,12 +6,13 @@ Two of the three runtime planes of `architecture/00-overview.arch.md` live here:
     work plane          the queue-driven job types of architecture 00 §3.3
 
 The third plane — the call session runtime — is a separate deployment unit
-(`Implementation/bluelab-agent-prod`) and holds no data-plane credential
+(`bluelab-agent-prod`, independently deployed) and holds no data-plane credential
 (`stack/adr/0071-call-plane-process-isolation.md`). Its *application-plane* half —
 admission, the runtime-bundle builder, and the three signed internal endpoints —
 lives in `bluelab.calls`.
 
-The governing documents are in the repository root, not in this directory:
+The governing documents live in `bluelab-platform`; locked local contract snapshots are under
+`contracts/platform/`:
 
     specs/          what the system must do (FR / NFR / CMP / SEC)
     architecture/   planes, components, consistency, trust boundaries

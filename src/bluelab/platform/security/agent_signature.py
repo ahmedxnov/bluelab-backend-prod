@@ -2,14 +2,14 @@
 verified constant-time, failing closed (ADR-0071 decision 2; api/02 §1.2).
 
 This is the *only* shared secret between the application plane and the call
-plane. It must stay version-locked with the identical primitive in
-`Implementation/bluelab-agent-prod/src/bluelab_voice/signing.py`.
+plane. Its deterministic vectors must stay identical to the independently versioned agent's mirrored
+primitive; neither repository reads the other during build.
 
 ────────────────────────────────────────────────────────────────────────────────
-ROUTE-BACK — amends api/02 §1.2 and ADR-0071 decision 2. Needs owner sign-off.
+RATIFIED AMENDMENT — api/02 §1.2 and ADR-0071 decision 2, 2026-09-05.
 ────────────────────────────────────────────────────────────────────────────────
 
-Both documents specify the signature as *"HMAC-SHA256 over the exact raw body"*.
+Both documents formerly specified the signature as *"HMAC-SHA256 over the exact raw body"*.
 A security pass found that under-specifies the primitive to the point of being
 exploitable:
 
@@ -35,9 +35,7 @@ Every element earns its place: METHOD and PATH bind the signature to *this*
 request; TIMESTAMP bounds replay; the body digest keeps the property the original
 specification wanted, since a matching digest means the body is unaltered.
 
-The agent must change to match. It has to change regardless — its endpoint paths
-and its per-segment transcript streaming already diverge from the contract
-(docs/call-plane-seam.md) — so this lands in the same pass at no extra cost.
+The agent mirrors this canonical string and verifies parity with fixed test vectors.
 
 ## What is still not defended, deliberately
 

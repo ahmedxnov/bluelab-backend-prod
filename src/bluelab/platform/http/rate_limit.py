@@ -4,7 +4,8 @@ Every operation in `api/openapi.yaml` declares `429`. Wiring that per endpoint
 means every future route has to remember, and the evidence that they will not is
 already in the repository: sign-in shipped with no limit at all, and the two gate
 exits followed it. So this sits in front of the whole surface and a new route
-inherits it by existing.
+inherits it by existing. The process-only `/healthz` route is the sole exception:
+liveness must not wait for the coordination store it helps diagnose.
 
 ## What this is NOT
 
@@ -51,6 +52,7 @@ from bluelab.platform.security.throttle import Limit, Throttle
 from bluelab.platform.telemetry.correlation import current_request_id
 
 _BUCKET: Final = "surface"
+_HEALTH_PATH: Final = "/healthz"
 
 
 def _principal_key(scope: Scope) -> str:
@@ -87,6 +89,10 @@ class RateLimitMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        if scope.get("path") == _HEALTH_PATH:
             await self.app(scope, receive, send)
             return
 

@@ -1,7 +1,7 @@
 """The application plane's half of the call seam.
 
 The call *session runtime* is not here — it is a separate deployment unit
-(`Implementation/bluelab-agent-prod`) that holds no data-plane credential
+(`bluelab-agent-prod`) that holds no data-plane credential
 (ADR-0071). What lives here is everything on the call path that must touch the
 transactional store:
 

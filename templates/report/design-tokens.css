@@ -1,0 +1,40 @@
+/* Design tokens — the single source, declared once as CSS custom properties.
+ *
+ * Tailwind CSS v4 `@theme` (ADR-0042). These same variables style the report PDF
+ * templates, so the on-screen and printed forms stay visually kin without
+ * duplicated style constants (ADR-0021).
+ *
+ * Full values and their rationale: ux/01 §2–§4. Summarised here so the shape is
+ * visible, never re-decided:
+ *
+ *   neutrals & brand   --bg-page --bg-surface --bg-sunken --border --border-strong
+ *                      --ink --ink-secondary --ink-muted
+ *                      --primary --primary-hover --primary-tint --accent-self
+ *
+ *   the sacred triple  green ≥ 7.5 · amber ≥ 5.5 · red below (FR-SCR-005).
+ *                      Each band has a TEXT/ICON form (AA on white) and a FILL
+ *                      form at 600 weight, because the 500-weight tones fail
+ *                      WCAG 1.4.11 on light surfaces (gate F-2). Plus a tint bg.
+ *
+ *   live               --live, reserved EXCLUSIVELY for the in-call surface, so
+ *                      red-as-band and red-as-live never sit on one screen.
+ *
+ *   type               IBM Plex Sans / Mono / Sans Arabic; scale display · title ·
+ *                      body · body-sm · eyebrow · score-xl · arabic-body.
+ *                      Body never below 16px. Tabular numerals wherever numbers
+ *                      align in columns.
+ *
+ *   space              4-base: 4 8 12 16 24 32 48 64
+ *   radius             6 inputs/buttons/pills · 10 cards · 999 avatars/count pills
+ *   elevation          e0 flat · e1 cards · e2 overlays. Nothing else.
+ *   motion             150–200ms ease-out on transform/opacity/color only.
+ *                      Three sanctioned animations: state transitions, the LIVE
+ *                      pulse, skeleton shimmer — all honour prefers-reduced-motion.
+ *   z-scale            10 sticky sub-headers · 20 sidebar · 30 toasts · 50 dialogs
+ *
+ * Light theme only in v1. Dark mode is not designed — no requirement asks for it,
+ * and the token layer keeps it possible.
+ *
+ * Colour is reserved for meaning (bands, statuses, speakers) and never used as
+ * decoration. No gradients-as-branding, no AI purple/pink (P-3, ux/01 §1).
+ */

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "source_repository": "https://github.com/ahmedxnov/bluelab-frontend-prod.git",
+  "source_commit": "7e642f5dbc7ff348bb223497dfbfe36c78088742",
+  "source_path": "src/styles/theme.css",
+  "local_path": "templates/report/design-tokens.css",
+  "sha256": "da57f4967cae19919c1db135341718589b3985e4674ab94956b989f348687916"
+}

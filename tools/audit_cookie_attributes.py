@@ -47,7 +47,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BUILD_ROOT = REPO_ROOT.parents[1]
 
 BACKEND_SRC = REPO_ROOT / "src"
 COOKIE_MODULE = BACKEND_SRC / "bluelab" / "platform" / "security" / "cookies.py"
@@ -86,7 +85,7 @@ def _rel(path: Path) -> str:
     worse than the violation it was about to report.
     """
     try:
-        return path.relative_to(BUILD_ROOT).as_posix()
+        return path.relative_to(REPO_ROOT).as_posix()
     except ValueError:
         return path.as_posix()
 

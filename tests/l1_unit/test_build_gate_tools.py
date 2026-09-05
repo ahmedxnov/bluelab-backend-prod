@@ -505,21 +505,6 @@ def test_the_rep_performance_band_is_not_a_rollout_branch(tmp_path):
     assert tiers.scan_python(tmp_path) == []
 
 
-def test_a_typescript_conditional_on_a_tier_is_flagged(tmp_path):
-    """The SPA is application code too, and SEC-026 does not exempt it. Line-based
-    rather than parsed, so it is a weaker instrument than the Python scan — which
-    is exactly why it needs its own test."""
-    write(tmp_path / "gate.ts", "export const x = (c) => { if (c.rolloutTier === 1) return 'a'; };\n")
-
-    assert kinds(tiers.scan_typescript(tmp_path)) == {"tier-branch"}
-
-
-def test_a_typescript_comment_about_tiers_is_not_a_branch(tmp_path):
-    write(tmp_path / "note.ts", "// At Tier 1 the cap is tighter && the demo is small\nexport const x = 1;\n")
-
-    assert tiers.scan_typescript(tmp_path) == []
-
-
 @pytest.mark.verifies("SEC-026")
 def test_the_committed_source_carries_no_tier_branch():
     """SEC-026's own verification clause, executed: "a code scan finds no
@@ -889,7 +874,6 @@ def test_a_clean_repository_exits_zero(tool, monkeypatch):
 def test_a_tier_branch_makes_the_scan_exit_one(tmp_path, monkeypatch):
     write(tmp_path / "m.py", "def f(s):\n    if s.rollout_tier:\n        return 1\n    return 2\n")
     monkeypatch.setattr(tiers, "BACKEND_SRC", tmp_path)
-    monkeypatch.setattr(tiers, "FRONTEND_SRC", tmp_path / "absent")
     monkeypatch.setattr(sys, "argv", ["scan_tier_branches.py"])
 
     assert tiers.main() == 1

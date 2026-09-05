@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "source_repository": "https://github.com/ahmedxnov/bluelab-platform.git",
+  "source_commit": "2fda0e7d9a92e4e8e9354c41d3d11539222b1533",
+  "source_state": "repository-split working-tree amendment 2026-09-05; exact authority is the per-file SHA-256",
+  "snapshot_root": "contracts/platform",
+  "files": {
+    "api/02-async-internal-contracts.api.md": "8e8338c49664a229709f00fec3e4f416da595a8a9ca36171784a38e51c7ce0c2",
+    "api/03-error-catalog.api.md": "fec1587f4f156065ce523cb56676f287162ed6a8430198f273f05fd2e9327d87",
+    "api/06-fr-coverage.api.md": "2a149ef1d718e38be83c75c490e7358e80989117b90a08fbf09234de604fc48c",
+    "api/openapi.yaml": "2f9ad32046ba3e69f5179bd49bfe0045c72752f1ad8952c18476de6b223f55a4",
+    "specs/00-overview.spec.md": "a8d52dfff1db10cc9ed901de3a4ce7817867001dc824bf84b031c1245722ca22",
+    "specs/01-nfr-and-compliance.spec.md": "7a6cd5b84f255e111bd85c61614b058b02d6e710132200f07dbd6febe0ac8ee4",
+    "specs/02-security-requirements.spec.md": "c21c6cf9cf334807c8d71be5e02899ccc31ccec8408d62b45e1ab8dd3a7482ac",
+    "specs/10-identity-and-access.spec.md": "31128ca4df7e49e168216110e8215c4f5fdcd4654394b3222e8d91318f01a5b9",
+    "specs/11-knowledge.spec.md": "79383fc34b322ad16c00691a95759654dbbc921d9af85eeabc4a770cd3e2db1c",
+    "specs/12-drill-lifecycle.spec.md": "2fc044cb84da9a5e1d468725664829f73a734cdc1fc5547ee03d4650f98459f5",
+    "specs/13-live-call.spec.md": "dd407b8a5101c740b8a216e21719494a97defd8539de992160515162f6c941a8",
+    "specs/14-scoring-and-review.spec.md": "d5b4cdcd004fd5409b563fbd02a91886a3f3d94023f366872ef1bb897fad2a8d",
+    "specs/20-training-rep.spec.md": "200a1b92739e5644b90253fdcbce6a1f226262935955e12b5e3688629ebe8bdd",
+    "specs/21-training-manager.spec.md": "3f639d7d09f4177fcfd14befb521b80a73ba6f8c52884549b4364330f614d453",
+    "specs/22-hiring-manager.spec.md": "da18447c80321ed82980638846f160f0fecea99758a090e5fcd80d8f2e36d426",
+    "specs/23-candidate-flow.spec.md": "3f3b7be61d731f551cfd2f14ac55dee210563dc532a69fb4ca908df1d889ea8b"
+  },
+  "citable_adr_ids": [
+    "ADR-0001", "ADR-0002", "ADR-0003", "ADR-0004", "ADR-0005", "ADR-0006",
+    "ADR-0007", "ADR-0008", "ADR-0009", "ADR-0010", "ADR-0011", "ADR-0012",
+    "ADR-0013", "ADR-0014", "ADR-0015", "ADR-0016", "ADR-0017", "ADR-0018",
+    "ADR-0019", "ADR-0020", "ADR-0021", "ADR-0022", "ADR-0023", "ADR-0024",
+    "ADR-0025", "ADR-0026", "ADR-0027", "ADR-0028", "ADR-0029", "ADR-0030",
+    "ADR-0031", "ADR-0032", "ADR-0033", "ADR-0034", "ADR-0035", "ADR-0036",
+    "ADR-0037", "ADR-0038", "ADR-0039", "ADR-0040", "ADR-0041", "ADR-0042",
+    "ADR-0043", "ADR-0044", "ADR-0045", "ADR-0046", "ADR-0047", "ADR-0048",
+    "ADR-0049", "ADR-0050", "ADR-0051", "ADR-0052", "ADR-0053", "ADR-0054",
+    "ADR-0055", "ADR-0056", "ADR-0057", "ADR-0058", "ADR-0059", "ADR-0060",
+    "ADR-0061", "ADR-0062", "ADR-0063", "ADR-0064", "ADR-0065", "ADR-0066",
+    "ADR-0067", "ADR-0068", "ADR-0069", "ADR-0070", "ADR-0071"
+  ]
+}

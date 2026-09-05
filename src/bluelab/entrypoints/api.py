@@ -34,7 +34,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from fastapi import FastAPI
 from valkey.asyncio import Valkey
 
-from bluelab.api import v1
+from bluelab.api import health, v1
 from bluelab.platform.config import Environment, Settings, get_settings
 from bluelab.platform.db.engine import dispose_engine
 from bluelab.platform.errors import handlers
@@ -121,6 +121,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # surface is RFC 9457 from one place (api/00 §5).
     handlers.register(app)
 
+    app.include_router(health.router)
     app.include_router(v1.router)
     return app
 
@@ -141,3 +142,7 @@ def main() -> None:
         log_config=None,
         access_log=False,
     )
+
+
+if __name__ == "__main__":
+    main()

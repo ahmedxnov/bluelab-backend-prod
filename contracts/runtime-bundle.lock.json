@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "source_repository": "https://github.com/ahmedxnov/bluelab-agent-prod.git",
+  "source_commit": "e253553b0a15ddc35566641b925fa554dee86297",
+  "source_state": "repository-split working-tree amendment 2026-09-05; exact authority is the per-file SHA-256",
+  "files": {
+    "src/bluelab_runtime_bundle/__init__.py": "4536c5a5e8cfa757b3af79a65bcd32455478aba68cc6eb72fc3444b1f85176ba",
+    "src/bluelab_runtime_bundle/guard.py": "23723b92adad19cb6ab13dcae1631a0b48a20e80cd862db9145d93103cc02403",
+    "src/bluelab_runtime_bundle/schema.py": "de768bed4e91616ec84d398842981eec3c1c046969f1c4a03096eddeaa45de02"
+  }
+}

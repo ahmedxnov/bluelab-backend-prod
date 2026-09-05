@@ -1,10 +1,35 @@
-"""The runtime-bundle contract — the *only* package shared with the call plane.
+"""Public surface for the locked runtime-bundle contract implementation."""
 
-Canonical copy lives in `Implementation/bluelab-agent-prod/src/bluelab_runtime_bundle/`;
-this is the version-locked mirror ADR-0071 requires across the two deployment
-units. Divergence between the two is a defect, not a variation.
+from .guard import (
+    FORBIDDEN_FIELDS,
+    KnowledgeBoundaryError,
+    assert_payload_safe,
+    assert_runtime_safe,
+    find_forbidden_fields,
+)
+from .schema import (
+    CallType,
+    LeadType,
+    Participant,
+    PersonaSections,
+    RuntimeBundle,
+    RuntimeConfig,
+    Scenario,
+)
 
-Nothing in `bluelab.modules` or `bluelab.work` may import this package — only
-`bluelab.calls.bundle_builder` may, and the import-linter contract in
-`pyproject.toml` enforces that.
-"""
+__all__ = [
+    "FORBIDDEN_FIELDS",
+    "CallType",
+    "KnowledgeBoundaryError",
+    "LeadType",
+    "Participant",
+    "PersonaSections",
+    "RuntimeBundle",
+    "RuntimeConfig",
+    "Scenario",
+    "assert_payload_safe",
+    "assert_runtime_safe",
+    "find_forbidden_fields",
+]
+
+__version__ = "1.0.0"

@@ -1,0 +1,4187 @@
+openapi: "3.1.0"
+
+# BlueLab v1 — API & Interface Contracts (Phase 5, F-1 surface)
+# The authored contract: code conforms to this file (ADR-0035). Conventions, auth, error and
+# idempotency semantics: 00-contract-overview.api.md. Realtime call contract: 01-realtime-call-contract.api.md.
+# Error registry: 03-error-catalog.api.md. Every operation cites the requirements it realizes;
+# the full FR -> interface matrix is 06-fr-coverage.api.md.
+
+info:
+  title: BlueLab v1 API
+  version: 1.0.0
+  summary: Voice-roleplay training and hiring platform — product, candidate, and operations surfaces.
+  description: >
+    Contract-first specification for the BlueLab application plane (F-1). Three principals:
+    account holders (manager, rep) via session cookie; candidates via bearer capability token;
+    BlueLab Internal Operations via a separate ops session. Cross-scope denial is an
+    indistinguishable 404 (ADR-0036). All errors are RFC 9457 application/problem+json.
+    Timestamps are UTC RFC 3339; months are YYYY-MM interpreted in the org's timezone;
+    scores are 0-10 with one decimal and server-computed tier bands.
+  license:
+    name: Proprietary — BlueLab. All rights reserved.
+    url: https://bluelab.example/license
+  contact:
+    name: BlueLab Engineering
+
+servers:
+  - url: https://api.bluelab.example
+    description: Placeholder origin — Phase 7 owns real hosts. Paths carry their own /api/v1, /ops/v1, /hooks prefixes.
+  - url: http://127.0.0.1:4010
+    description: Prism mock server (contract walkthroughs).
+
+security:
+  - sessionCookie: []
+
+tags:
+  - name: Auth
+    description: Sign-in, session, first-sign-in gate, acceptances, password reset (FR-IDA-004/005/006).
+  - name: Legal
+    description: Current notice/terms versions (CMP-002, CMP-005).
+  - name: Me
+    description: Rep home surfaces — progress, profile, coach feedback (FR-TRP-001..005).
+  - name: Library
+    description: The rep's drill library and per-drill history (FR-TRP-006..013).
+  - name: Drills
+    description: Authoring lifecycle, brief, and product reference (FR-DRL-*, FR-LIV-001/002, FR-KNW-009).
+  - name: Knowledge
+    description: Product documents, replacement flow, publish (FR-KNW-*).
+  - name: Calls
+    description: Call admission and pre-join cancel — the F-2 handshake (FR-LIV-003..005, 016).
+  - name: Attempts
+    description: Attempt records and reviews (FR-SCR-*).
+  - name: Team
+    description: Manager coaching surfaces — dashboard, roster, deep dives, catalog, assignment (FR-TRM-*).
+  - name: Hiring
+    description: Positions, assessments, candidates, invites, pipeline, reports, decisions, HR handoff (FR-HIR-*).
+  - name: Assessment
+    description: Candidate-facing journey — token-authenticated (FR-CND-*).
+  - name: Ops
+    description: BlueLab Internal Operations — separate surface and session (ADR-0010).
+  - name: Hooks
+    description: Signed integration receivers (01-realtime-call-contract §7).
+
+paths:
+
+  # ───────────────────────────── Legal reference ─────────────────────────────
+
+  /api/v1/legal-documents:
+    get:
+      tags: [Legal]
+      summary: Current legal document versions
+      description: >
+        Current recording-consent notice, Terms of Use, and Privacy Notice versions with links to
+        their text. Public and cacheable; rendered beside the consent checkbox and acceptance
+        acknowledgment at both entry gates (CMP-002, CMP-005).
+      operationId: getLegalDocuments
+      security: []
+      responses:
+        "200":
+          description: Current versions per kind.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LegalDocuments" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Auth & session ─────────────────────────────
+
+  /api/v1/auth/session:
+    post:
+      tags: [Auth]
+      summary: Sign in
+      description: >
+        Credential authentication (FR-IDA-005). Refusal never discloses whether the account exists:
+        wrong credentials answer 401 invalid-credentials uniformly. A deactivated account with
+        correct credentials answers 403 account-deactivated (AC-IDA-003). Success sets the
+        __Host-bluelab_session cookie; if the account still holds its initial credential the session
+        is gate-limited until first sign-in completes (FR-IDA-004).
+      operationId: signIn
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SignInRequest" }
+      responses:
+        "200":
+          description: Session established; body mirrors GET /auth/session.
+          headers:
+            Set-Cookie:
+              description: "__Host-bluelab_session; HttpOnly; Secure; SameSite=Strict; Path=/"
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionView" }
+        "401":
+          description: "Problem type: invalid-credentials."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403":
+          description: "Problem type: account-deactivated."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    get:
+      tags: [Auth]
+      summary: Current session and pending gates
+      description: >
+        The signed-in principal, its scope, and any pending gates (first sign-in; re-consent or
+        re-acceptance after a material document change — CMP-002/CMP-005). The SPA calls this on
+        boot and routes to the gate screen while any gate is pending.
+      operationId: getSession
+      responses:
+        "200":
+          description: Current principal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [Auth]
+      summary: Sign out
+      operationId: signOut
+      responses:
+        "204":
+          description: Session destroyed; cookie cleared.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/auth/first-sign-in:
+    post:
+      tags: [Auth]
+      summary: Complete the first-sign-in gate
+      description: >
+        One screen, three required actions (FR-IDA-004): set a new password, select the recording
+        consent checkbox (CMP-002), acknowledge Terms of Use and Privacy Notice (CMP-005) — the
+        consent checkbox and terms acknowledgment are distinct controls; completing any subset alone
+        does not grant access (AC-IDA-002: consent=false is a 422 and records nothing). Records the
+        consent and acceptance events with document versions. Idempotent replay after success is a
+        no-op 200 (00-contract-overview §6).
+      operationId: completeFirstSignIn
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FirstSignInRequest" }
+      responses:
+        "200":
+          description: Gate complete; session fully established.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: "Problem type: first-sign-in-not-pending — the account's credential is already set; the gate is not pending (gate F-6)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Missing consent/terms selection or password below policy (problem types: validation-error, password-policy)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/auth/acceptances:
+    post:
+      tags: [Auth]
+      summary: Record re-consent or re-acceptance after a material document change
+      description: >
+        Clears pending consent-required / terms-acceptance-required gates for an established account
+        session (CMP-002: consent re-requested only when the notice materially changes; CMP-005:
+        acceptance re-requested at next entry). Supply only the pending instruments; each records
+        an event with its current version. Replay is a no-op success.
+      operationId: recordAcceptances
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AcceptancesRequest" }
+      responses:
+        "200":
+          description: Gates cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/auth/password-reset-request:
+    post:
+      tags: [Auth]
+      summary: Request a password reset link
+      description: >
+        Emails a time-limited single-use reset link (E-1, FR-IDA-006). Always answers 202 regardless
+        of whether the address has an account (FR-IDA-005 non-disclosure).
+      operationId: requestPasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202":
+          description: Accepted (unconditionally).
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/auth/password-reset:
+    post:
+      tags: [Auth]
+      summary: Complete a password reset
+      description: Sets a new password and invalidates the link (FR-IDA-006).
+      operationId: completePasswordReset
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token: { type: string }
+                new_password: { type: string, minLength: 12, maxLength: 1024, description: "Policy floor is 12 (platform.security.passwords.MIN_LENGTH); the ceiling bounds argon2id's memory cost per request." }
+      responses:
+        "204":
+          description: Password set; link invalidated.
+        "401":
+          description: "Problem type: reset-token-invalid."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem types: validation-error, password-policy."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Rep home (Me) ─────────────────────────────
+
+  /api/v1/me/progress:
+    get:
+      tags: [Me]
+      summary: My Progress home
+      description: >
+        The rep's current month as personal coaching (FR-TRP-001): monthly rating with delta vs the
+        prior month and rising/slipping indicator, weekly trend (scopable by call type), and one card
+        per call type over the last 30 days, weakest first. Values come from the same canonical
+        derivation the manager reads (FR-TRP-002 / AC-TRP-002). No peer data.
+      operationId: getMyProgress
+      parameters:
+        - name: call_type
+          in: query
+          description: Scope the weekly trend line to one call type (FR-TRP-001).
+          schema: { $ref: "#/components/schemas/CallType" }
+      responses:
+        "200":
+          description: Progress home payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProgressHome" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/me/profile:
+    get:
+      tags: [Me]
+      summary: My profile
+      description: >
+        Identity and lifetime figures — total completed drills and lifetime overall rating
+        (FR-TRP-004) — plus earned badges (with winning rule) and locked badges (with goal)
+        (FR-TRP-005). Badges are visible only to their owner.
+      operationId: getMyProfile
+      responses:
+        "200":
+          description: Profile payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/me/coach-feedback:
+    get:
+      tags: [Me]
+      summary: Coach feedback feed
+      description: System-generated coaching tips with unread count (FR-TRP-003). Rep-only, newest first.
+      operationId: listCoachFeedback
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Feed page plus unread count.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CoachFeedbackPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/me/coach-feedback/mark-read:
+    post:
+      tags: [Me]
+      summary: Mark coach feedback read
+      description: Marks all feed entries up to and including the given entry as read (FR-TRP-003 unread count).
+      operationId: markCoachFeedbackRead
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [through_id]
+              properties:
+                through_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated unread count.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [unread_count]
+                properties:
+                  unread_count: { type: integer, minimum: 0 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Library ─────────────────────────────
+
+  /api/v1/me/library:
+    get:
+      tags: [Library]
+      summary: My drill library
+      description: >
+        One grid of everything the rep can practice (FR-TRP-006): assigned drills (due date +
+        allowance state, locked when exhausted — FR-TRP-013), self-authored drills, and the team
+        library. The self_authored source additionally includes the caller's own unpublished
+        drafts, marked status=draft — the rep's authoring surface for resuming them (FR-DRL-013,
+        gate F-1); drafts appear in no other principal's surface and cannot be taken
+        (409 drill-not-startable). Source tabs carry live counts (FR-TRP-007);
+        call-type/status filters and sort orders per FR-TRP-008. Cards link to the drill's brief
+        and, when attempted, its history.
+      operationId: getMyLibrary
+      parameters:
+        - name: source
+          in: query
+          schema: { type: string, enum: [all, assigned, self_authored], default: all }
+        - name: call_type
+          in: query
+          schema: { $ref: "#/components/schemas/CallType" }
+        - name: attempted
+          in: query
+          schema: { type: string, enum: [all, attempted, unattempted], default: all }
+        - name: sort
+          in: query
+          description: >
+            recommended = assigned drills by due date ascending, then unattempted library drills
+            newest-published first, then the rest by recency; recently_assigned = assignment
+            recency. Phase 13 may tune the recommended order with a contract note (gate F-11).
+          schema: { type: string, enum: [recommended, recently_assigned], default: recommended }
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Library page with per-tab counts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LibraryPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/my-history:
+    get:
+      tags: [Library]
+      summary: My history on a drill
+      description: >
+        The viewer's own statistics primitives on one drill — best, latest, average, trend
+        (FR-SCR-015) — and the attempt list newest first, each opening its review (FR-TRP-011);
+        chart-ready points oldest first (FR-TRP-012).
+      operationId: getMyDrillHistory
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      responses:
+        "200":
+          description: History payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DrillHistory" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Drills: authoring ─────────────────────────────
+
+  /api/v1/authoring-options:
+    get:
+      tags: [Drills]
+      summary: Challenge and hidden-motive libraries
+      description: The provided selection libraries for authoring inputs (FR-DRL-002).
+      operationId: listAuthoringOptions
+      parameters:
+        - name: kind
+          in: query
+          schema: { type: string, enum: [challenge, hidden_motive] }
+      responses:
+        "200":
+          description: Active options.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuthoringOption" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills:
+    post:
+      tags: [Drills]
+      summary: Create a draft drill
+      description: >
+        Creates a draft with the authoring intent (FR-DRL-002): call type (lead type iff Discovery,
+        FR-DRL-001), one or more challenges and hidden motives (library or custom). Custom entries
+        are job-relevance-checked at commit and rejected with the reason before they can influence
+        generation (FR-DRL-007, AC-DRL-004, CMP-003). Language is fixed ar-EG (FR-DRL-003).
+        Managers author team drills; reps author self-authored private drills (FR-TRP-009) — the
+        mode follows the caller's role, no assignment step exists here.
+      operationId: createDrill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DrillInputs" }
+      responses:
+        "201":
+          description: Draft created (FR-DRL-013 — resumable at any completeness).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DrillFull" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422":
+          description: "Problem types: validation-error; not-job-relevant (per-entry reasons in errors[])."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}:
+    get:
+      tags: [Drills]
+      summary: Drill full basis (author / team manager)
+      description: >
+        The complete basis: inputs including the concealed set, generated scenario, rubric with
+        weights, generation state, status. Reachable only by the drill's author and — for team
+        drills — the owning team's manager (FR-TRM-010, FR-SCR-017 authorship lift; the author-only
+        brief recap of FR-LIV-002 sources from here). Everyone else: 404 (ADR-0036). Published
+        content is frozen — no mutation surface exists (FR-DRL-015, AC-DRL-006).
+      operationId: getDrill
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      responses:
+        "200":
+          description: Full drill.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DrillFull" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/inputs:
+    put:
+      tags: [Drills]
+      summary: Replace authoring inputs (draft only)
+      description: >
+        Replaces the intent wholesale while the drill is a draft (FR-DRL-002/005 — scenario changes
+        come only from input changes plus regeneration). Same job-relevance gate as creation
+        (FR-DRL-007). On a published or archived drill: 409 drill-not-draft (FR-DRL-015).
+      operationId: replaceDrillInputs
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DrillInputs" }
+      responses:
+        "200":
+          description: Inputs replaced.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DrillFull" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: drill-not-draft."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem types: validation-error, not-job-relevant."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/scenario-generation:
+    post:
+      tags: [Drills]
+      summary: Generate (or regenerate) the scenario
+      description: >
+        Queues scenario generation from the drill's inputs (FR-DRL-004): buyer persona with unique
+        generated identity, situation context, product references drawn exclusively from the team's
+        published facts (FR-KNW-007), label derived from the persona. Regeneration replaces the
+        entire scenario (FR-DRL-005 / AC-DRL-002). Requires at least one challenge and one motive
+        (FR-DRL-002). Progress and failure surface on drill.generation (FR-DRL-006 — no fallback
+        content; retry is a new request). 202 pattern: 00-contract-overview §8.
+      operationId: generateScenario
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      responses:
+        "202":
+          description: Generation queued; poll GET /drills/{drill_id}.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenerationAccepted" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: drill-not-draft, generation-in-progress."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem type: validation-error (missing challenge or motive)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/rubric-generation:
+    post:
+      tags: [Drills]
+      summary: Generate (or regenerate) the rubric
+      description: >
+        Queues rubric generation (FR-DRL-008): dimensions with name, weight, rationale, derived from
+        call type, challenges, motives, and published facts. When a rubric already exists the
+        request must confirm that manual weight edits will be discarded (FR-DRL-011) — omitting
+        discard_confirmed answers 422. Replaces the rubric wholesale on success.
+      operationId: generateRubric
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                discard_confirmed:
+                  type: boolean
+                  description: Required true when regenerating over an existing rubric (FR-DRL-011).
+      responses:
+        "202":
+          description: Generation queued; poll GET /drills/{drill_id}.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenerationAccepted" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: drill-not-draft, generation-in-progress, generation-incomplete (no scenario yet)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem type: validation-error (discard_confirmed required)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/rubric/weights:
+    patch:
+      tags: [Drills]
+      summary: Tune rubric weights
+      description: >
+        Adjusts dimension weights while unpublished (FR-DRL-009a). Names and rationales are
+        generation-fixed; no dimension can be added or reshaped by hand (AC-DRL-008). Response
+        carries the live weight total for re-balancing display.
+      operationId: tuneRubricWeights
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [weights]
+              properties:
+                weights:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [dimension_id, weight]
+                    properties:
+                      dimension_id: { type: string, format: uuid }
+                      weight: { type: integer, minimum: 0, maximum: 100 }
+      responses:
+        "200":
+          description: Updated rubric with live total.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RubricView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: drill-not-draft."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/rubric/dimensions/{dimension_id}:
+    delete:
+      tags: [Drills]
+      summary: Delete a rubric dimension
+      description: >
+        Removes one dimension while unpublished (FR-DRL-009b, AC-DRL-008); publishing stays blocked
+        until remaining weights re-balance to exactly 100 (FR-DRL-010).
+      operationId: deleteRubricDimension
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+        - name: dimension_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Remaining rubric with live total.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RubricView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: drill-not-draft."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/publish:
+    post:
+      tags: [Drills]
+      summary: Publish a drill (freeze)
+      description: >
+        The T-5 freeze transaction (FR-DRL-014): with a generated scenario and a rubric totaling
+        exactly 100, freezes scenario, persona-derived label, rubric, language, and a snapshot of
+        the team's published facts as the answer key — immutable thereafter (FR-DRL-015).
+        Weights off 100 answer 409 weights-not-100 with meta.delta (AC-DRL-003 "+3 to balance").
+      operationId: publishDrill
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      responses:
+        "200":
+          description: Published drill (frozen).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DrillFull" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: weights-not-100 (meta.delta), generation-incomplete, drill-not-draft."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/archive:
+    post:
+      tags: [Drills]
+      summary: Archive a published drill
+      description: >
+        Withdraws the drill from all availability — libraries, assessments' future use, assignment
+        (cancelling any outstanding assignment so it leaves recipients' libraries) — while every
+        existing attempt, review, and statistic survives (FR-DRL-016, AC-DRL-007). Manager-only.
+        Idempotent: archiving an archived drill answers 200 with current state.
+      operationId: archiveDrill
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      responses:
+        "200":
+          description: Archived drill.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DrillFull" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: drill-not-archivable (drafts cannot archive)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/brief:
+    get:
+      tags: [Drills]
+      summary: Drill brief (participant-safe)
+      description: >
+        The pre-call brief rendered from the frozen scenario (FR-LIV-001): buyer identity block,
+        situation context, product summary, content scaled to call type. For the drill's author the
+        response additionally carries the collapsed setup recap (challenges + hidden motives,
+        FR-LIV-002, AC-LIV-002) — the author_recap field is absent for every other viewer, and no
+        other concealed element ever appears here (FR-SCR-017). Calls start only from this brief
+        (FR-LIV-003). Published briefs are frozen content — cacheable (00-contract-overview §2).
+      operationId: getDrillBrief
+      security:
+        - sessionCookie: []
+        - candidateToken: []
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      responses:
+        "200":
+          description: Brief.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BriefView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/reference:
+    get:
+      tags: [Drills]
+      summary: Product reference for a drill
+      description: >
+        Read-only product reference reached from the brief (FR-KNW-009): the facts the drill was
+        grounded in — its frozen snapshot for published drills, the team's current published facts
+        for an author's draft — grouped by document with the provenance line. What a participant
+        studies equals what grading checks (FR-KNW-007). No edit affordance of any kind
+        (AC-KNW-004).
+      operationId: getDrillReference
+      security:
+        - sessionCookie: []
+        - candidateToken: []
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      responses:
+        "200":
+          description: Reference.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReferenceView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Knowledge ─────────────────────────────
+
+  /api/v1/product-documents:
+    get:
+      tags: [Knowledge]
+      summary: List the team's product documents
+      description: >
+        The team's documents (≤ 10, FR-KNW-001) with live fact counts and draft-in-progress status
+        (FR-KNW-010). Manager-only; knowledge is team-scoped (FR-IDA-009).
+      operationId: listProductDocuments
+      responses:
+        "200":
+          description: Documents.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    maxItems: 10
+                    items: { $ref: "#/components/schemas/DocumentSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Knowledge]
+      summary: Create a product document
+      description: Creates an empty document; the 10-document cap answers 409 document-cap (FR-KNW-001).
+      operationId: createProductDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: "Problem type: document-cap."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/product-documents/{document_id}:
+    get:
+      tags: [Knowledge]
+      summary: Document detail with live facts
+      description: >
+        The document's live facts (label, value, note — FR-KNW-002), its live_version for the
+        optimistic publish flow, draft status, and latest upload state. Live facts keep serving all
+        consumers while a replacement is in progress (FR-KNW-010).
+      operationId: getProductDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentIdParam"
+      responses:
+        "200":
+          description: Document detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/product-documents/{document_id}/uploads:
+    post:
+      tags: [Knowledge]
+      summary: Upload a replacement source file
+      description: >
+        Replace-by-upload (FR-KNW-003): accepts a supported document type up to 20 MB, queues fact
+        extraction (202 pattern), and changes nothing in the live facts at upload time. Oversize
+        answers 413, unsupported type 415 — refused at selection with the reason. Extraction
+        failure or an empty result surfaces on the document's latest_upload with retry (FR-KNW-008,
+        AC-KNW-003); success creates the draft fact set for review. A new upload or manual draft
+        replaces any existing draft.
+      operationId: uploadDocumentSource
+      parameters:
+        - $ref: "#/components/parameters/DocumentIdParam"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Source document, ≤ 20 MB, supported types (FR-KNW-003).
+      responses:
+        "202":
+          description: Extraction queued; poll GET /product-documents/{document_id}.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [upload_id, status]
+                properties:
+                  upload_id: { type: string, format: uuid }
+                  status: { type: string, enum: [received] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "413":
+          description: "Problem type: file-too-large (meta.max_bytes)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "415":
+          description: "Problem type: unsupported-file-type (meta.supported)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/product-documents/{document_id}/draft:
+    put:
+      tags: [Knowledge]
+      summary: Create or replace the manual-entry draft
+      description: >
+        Replace-by-manual-entry (FR-KNW-004): the client prefetches current live facts, edits rows
+        (edit, remove, add), and PUTs the complete replacement set. Creates the draft (replacing any
+        existing draft) and leads to the same review step as upload. Row order is array order.
+      operationId: putManualDraft
+      parameters:
+        - $ref: "#/components/parameters/DocumentIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [facts]
+              properties:
+                facts:
+                  type: array
+                  minItems: 1
+                  items: { $ref: "#/components/schemas/FactInput" }
+      responses:
+        "200":
+          description: Draft stored; review available.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/product-documents/{document_id}/review:
+    get:
+      tags: [Knowledge]
+      summary: Review the pending replacement with diff
+      description: >
+        The pending replacement marked against the live facts (FR-KNW-005): every changed fact with
+        its prior value visible, additions and removals marked, plus the explicit replace warning
+        and the based_on_version the client must echo to publish. While extraction is running: 409
+        extraction-pending; with no draft: 409 no-draft-to-review.
+      operationId: getDocumentReview
+      parameters:
+        - $ref: "#/components/parameters/DocumentIdParam"
+      responses:
+        "200":
+          description: Diffed review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewDiff" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: no-draft-to-review, extraction-pending."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/product-documents/{document_id}/publish:
+    post:
+      tags: [Knowledge]
+      summary: Publish the reviewed replacement
+      description: >
+        The T-4 atomic swap (FR-KNW-006): replaces the document's live facts with the reviewed set —
+        exactly one live set at any time. Carries the review's based_on_version as the optimistic
+        CAS (FR-KNW-011): when live facts changed since the review was built, answers 409
+        stale-review and the client refetches the review for re-confirmation (AC-KNW-005). Newly
+        published drills ground in the new facts; already-published drills keep their frozen
+        snapshots (AC-KNW-001, FR-KNW-007).
+      operationId: publishDocument
+      parameters:
+        - $ref: "#/components/parameters/DocumentIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [based_on_version]
+              properties:
+                based_on_version: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Published; live facts replaced.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: stale-review, no-draft-to-review."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Calls (F-2 handshake) ─────────────────────────────
+
+  /api/v1/calls:
+    post:
+      tags: [Calls]
+      summary: Request call admission (start a call)
+      description: >
+        The T-1 admission gate every call passes (01-realtime-call-contract §2): consent backstop
+        (FR-LIV-004, CMP-002), single-live-call lease keyed on the participant (FR-LIV-005,
+        ADR-0011 — across every session, device, and valid token), attempts allowance CAS on
+        assigned drills (FR-TRP-013), strict stage order and one-restart accounting for candidates
+        (FR-CND-004/010). Calls start only from a drill's brief (FR-LIV-003 — the SPA enforces the
+        journey; the server enforces eligibility). Succeeds with a CallGrant: a single-room LiveKit
+        token embedding explicit dispatch of the bluelab-buyer agent. mode=test runs the same live
+        call ephemerally — no attempt row, no capture, nothing recorded (FR-DRL-012). Failure to
+        establish after a grant voids everything and retry is a fresh POST (FR-LIV-016).
+      operationId: requestCall
+      security:
+        - sessionCookie: []
+        - candidateToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CallRequest" }
+      responses:
+        "201":
+          description: Admitted; connect to LiveKit within join_deadline_seconds.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CallGrant" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            Problem types: call-already-active (FR-LIV-005), allowance-exhausted (meta counts,
+            FR-TRP-013), stage-not-next / stage-consumed (FR-CND-004/010), consent-required
+            (FR-LIV-004), preflight-required (candidates), drill-not-startable, assessment-completed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503":
+          description: "Problem type: call-capacity — nothing recorded or consumed; retry after Retry-After (FR-LIV-016, NFR-002)."
+          headers:
+            Retry-After:
+              schema: { type: integer }
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /api/v1/calls/current:
+    delete:
+      tags: [Calls]
+      summary: Cancel a not-yet-established call
+      description: >
+        Releases the caller's admission (lease + T-1 compensation) while the call has not
+        established media — the client-side path of FR-LIV-016. Once the call is live this answers
+        409 call-already-active: an established call ends only in-room (01-realtime-call-contract
+        §3), so no second device can kill a live call (AC-LIV-003).
+      operationId: cancelPendingCall
+      security:
+        - sessionCookie: []
+        - candidateToken: []
+      responses:
+        "204":
+          description: Admission cancelled; nothing recorded or consumed.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: "Problem type: no-active-call."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: "Problem type: call-already-active (call is established)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Attempts & reviews ─────────────────────────────
+
+  /api/v1/attempts/{attempt_id}:
+    get:
+      tags: [Attempts]
+      summary: Attempt record and status
+      description: >
+        The attempt record (FR-SCR-014): drill, timing, duration, status, restart flag. The SPA
+        polls this after call end; grading_pending renders as preparation in progress, never as a
+        failure (FR-SCR-009, AC-SCR-005). review_ready flips when the review can open. Access:
+        the participant (rep own; not candidates — FR-SCR-018) and the team's manager.
+      operationId: getAttempt
+      parameters:
+        - $ref: "#/components/parameters/AttemptIdParam"
+      responses:
+        "200":
+          description: Attempt record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttemptView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/attempts/{attempt_id}/review:
+    get:
+      tags: [Attempts]
+      summary: The review
+      description: >
+        The complete review (FR-SCR-010): drill and buyer identity, duration, overall score with
+        band, coach takeaway, rubric breakdown (per-dimension score, name, note — weight present
+        only for the drill's author or the owning team's manager, FR-SCR-017/AC-SCR-003), the
+        moments list (amber/red with verbatim quote, try-instead, why-it-matters — FR-SCR-007), the
+        full transcript, and playback: short-lived recording URL when available, pinned to the most
+        coachable moment (first red, else first amber, else start — FR-SCR-011). When the recording
+        is unavailable the review still renders complete with audio marked unavailable
+        (FR-SCR-013). Viewer access per FR-SCR-018: rep their own (self-authored stays private to
+        its author, AC-TRP-004); manager read-only replay of team attempts and their positions'
+        candidate attempts, with replay context naming whose attempt and its number (FR-TRM-007);
+        candidates never (404). Commentary English, quotes verbatim Arabic (FR-SCR-008). Scorecard
+        content is immutable — byte-identical on every later view (FR-SCR-003, AC-SCR-002).
+      operationId: getReview
+      parameters:
+        - $ref: "#/components/parameters/AttemptIdParam"
+      responses:
+        "200":
+          description: Review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: review-not-ready — attempt not yet graded; keep polling GET /attempts/{attempt_id}."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Team (manager) ─────────────────────────────
+
+  /api/v1/team/dashboard:
+    get:
+      tags: [Team]
+      summary: Team dashboard
+      description: >
+        The month's coaching picture (FR-TRM-004): team average with delta vs prior month,
+        top-performer and needs-coaching counts (tiers per FR-TRM-003, suppressed under five rated
+        reps), and gap analysis per call type sorted widest first with severity marks. All values
+        from the canonical counted-pool derivations (FR-TRM-002; AC-TRM-001/002).
+      operationId: getTeamDashboard
+      parameters:
+        - $ref: "#/components/parameters/MonthParam"
+      responses:
+        "200":
+          description: Dashboard.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TeamDashboard" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/team/roster:
+    get:
+      tags: [Team]
+      summary: Team roster
+      description: >
+        Every team rep sorted by monthly rating (FR-TRM-005): tier pill, rating, counted attempts,
+        strongest and weakest call types. Rows open the rep's deep dive.
+      operationId: getTeamRoster
+      parameters:
+        - $ref: "#/components/parameters/MonthParam"
+      responses:
+        "200":
+          description: Roster.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [month, data]
+                properties:
+                  month: { $ref: "#/components/schemas/Month" }
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/RosterRow" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/team/reps/{account_id}:
+    get:
+      tags: [Team]
+      summary: Rep deep dive
+      description: >
+        One rep's month (FR-TRM-006): monthly rating with trend, per-call-type profile, recent
+        counted attempts each opening its replay (FR-TRM-007 via GET /attempts/{id}/review). Same
+        numbers the rep sees (FR-TRP-002).
+      operationId: getRepDeepDive
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/MonthParam"
+      responses:
+        "200":
+          description: Deep dive.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RepDeepDive" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/team/drills:
+    get:
+      tags: [Team]
+      summary: Team drill catalog
+      description: >
+        The team's drills — published and drafts — with status, average score, attempt count, last
+        update (FR-TRM-008). Self-authored rep drills never appear (FR-TRP-009, AC-TRP-004).
+      operationId: getTeamDrillCatalog
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [all, draft, published, archived], default: all }
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Catalog page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/CatalogItem" }
+                  pagination: { $ref: "#/components/schemas/CursorPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/team/drills/{drill_id}/stats:
+    get:
+      tags: [Team]
+      summary: Drill rollup and leaderboard
+      description: >
+        A published drill's detail numbers (FR-TRM-009): rollup — team average on the drill, reps
+        practiced of eligible, total attempts (FR-SCR-016) — and the leaderboard of reps ranked by
+        best score with last-attempt recency and a replay per rep (AC-TRM-004).
+      operationId: getTeamDrillStats
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      responses:
+        "200":
+          description: Rollup + leaderboard.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DrillStats" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/team/cohorts:
+    get:
+      tags: [Team]
+      summary: Assignment quick-pick cohorts
+      description: >
+        Computed recipient cohorts (FR-TRM-014): bottom half by rating, rating below 6.0, fewer
+        than 5 counted attempts this month, newest joiners.
+      operationId: getTeamCohorts
+      parameters:
+        - $ref: "#/components/parameters/MonthParam"
+      responses:
+        "200":
+          description: Cohort membership.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CohortsView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/drills/{drill_id}/assignment:
+    put:
+      tags: [Team]
+      summary: Assign or re-assign a drill
+      description: >
+        Full-replace upsert of the drill's single assignment (FR-TRM-011): recipients, org-local due
+        date, attempts allowance. Re-assignment updates recipients/due date and grants every
+        recipient a fresh allowance — never duplicating the drill (FR-TRM-012, AC-TRM-005); edits
+        take effect immediately and touch nothing frozen (FR-TRM-013). Assignment sends no email
+        (FR-TRM-011). Draft or archived drills answer 409.
+      operationId: putAssignment
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssignmentPut" }
+      responses:
+        "200":
+          description: Assignment state after the write.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssignmentView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: drill-not-startable (draft/archived cannot be assigned)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Hiring (manager) ─────────────────────────────
+
+  /api/v1/positions:
+    get:
+      tags: [Hiring]
+      summary: Positions list
+      description: >
+        The manager's positions with status (needs authoring / active / closed) and the pipeline
+        counts — invited, pending review, approved-unsent — that drive the adaptive primary action
+        and the summary cards (FR-HIR-001/002).
+      operationId: listPositions
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Positions page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, totals, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/PositionSummary" }
+                  totals:
+                    type: object
+                    description: Server-computed aggregates across ALL the manager's positions, independent of pagination (FR-HIR-002; gate F-4).
+                    required: [open_positions, pending_review, approved_unsent]
+                    properties:
+                      open_positions: { type: integer, minimum: 0 }
+                      pending_review: { type: integer, minimum: 0 }
+                      approved_unsent: { type: integer, minimum: 0 }
+                  pagination: { $ref: "#/components/schemas/CursorPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Hiring]
+      summary: Create a position
+      description: >
+        Creates a position (FR-HIR-003): candidate-facing title, openings, completion-notification
+        toggle (E-5), candidate-report policy (default rejected_only) governing E-3 delivery
+        (FR-CND-012). Call language displays as Egyptian Arabic, fixed.
+      operationId: createPosition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionCreate" }
+      responses:
+        "201":
+          description: Created (status needs_authoring).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PositionDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/positions/{position_id}:
+    get:
+      tags: [Hiring]
+      summary: Position detail
+      description: Settings, assessment stages in order, freeze state, and pipeline counts. Closed positions are readable archives (FR-HIR-015).
+      operationId: getPosition
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+      responses:
+        "200":
+          description: Position.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PositionDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    patch:
+      tags: [Hiring]
+      summary: Update position settings
+      description: >
+        Edits settings — title, openings, notification toggle, report policy, invite expiry preset,
+        invite email template (FR-HIR-003/008). The assessment itself changes only via PUT
+        /assessment; closed positions answer 409 position-closed.
+      operationId: updatePosition
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PositionPatch" }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PositionDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: position-closed."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/positions/{position_id}/assessment:
+    put:
+      tags: [Hiring]
+      summary: Compose the assessment (ordered drill set)
+      description: >
+        Full-replace of the ordered stage list from the team's published catalog (FR-HIR-004); any
+        count, freely reordered; inline-authored drills join the catalog via the standard flow and
+        are then referenced here. Saving with at least one drill activates the position
+        (FR-HIR-005). After the first invite the set and order are frozen: 409 assessment-frozen
+        (AC-HIR-001). Every candidate faces the identical assessment (CMP-003).
+      operationId: putAssessment
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [drill_ids]
+              properties:
+                drill_ids:
+                  type: array
+                  minItems: 1
+                  items: { type: string, format: uuid }
+                  description: Published team drills, in stage order.
+      responses:
+        "200":
+          description: Assessment saved; position active.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PositionDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: assessment-frozen, position-closed, drill-not-startable (unpublished/archived drill in the set)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/positions/{position_id}/candidates:
+    get:
+      tags: [Hiring]
+      summary: Pipeline views
+      description: >
+        The position's candidates in three views with live counts (FR-HIR-010): pipeline (everyone,
+        journey state + decision state + latest invite delivery), review_queue (completed, ranked
+        by overall score descending), approved (with contact details). Incomplete candidates
+        (expired mid-assessment or consumed stage) are marked and remain decidable on partial
+        evidence (FR-HIR-016).
+      operationId: listPositionCandidates
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+        - name: view
+          in: query
+          schema: { type: string, enum: [pipeline, review_queue, approved], default: pipeline }
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Candidates page with tab counts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PipelinePage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Hiring]
+      summary: Add a candidate batch
+      description: >
+        Adds candidates as entries of name, email, phone, LinkedIn, source, plus the
+        manager-private internal note (FR-HIR-006 — never visible to any candidate). Batch is
+        atomic. Requires Idempotency-Key (ADR-0040). Closed positions answer 409.
+      operationId: addCandidates
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidates]
+              properties:
+                candidates:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { $ref: "#/components/schemas/CandidateCreate" }
+      responses:
+        "201":
+          description: Candidates created (not yet invited).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [created]
+                properties:
+                  created:
+                    type: array
+                    items:
+                      type: object
+                      required: [candidate_id, name, email]
+                      properties:
+                        candidate_id: { type: string, format: uuid }
+                        name: { type: string }
+                        email: { type: string, format: email }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: position-closed, idempotency-key-reuse."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem types: validation-error; idempotency-key-required when the header is missing (gate F-5)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/positions/{position_id}/candidates/parse:
+    post:
+      tags: [Hiring]
+      summary: Parse a bulk candidate file
+      description: >
+        Parses an uploaded list in the downloadable template format into rows that pre-fill the
+        batch for review and editing (FR-HIR-007). Never creates candidates or sends invites —
+        sending always happens from the reviewed batch via the endpoints above. The downloadable
+        template itself is an SPA-bundled static asset versioned with the frontend, not an API
+        resource (gate F-9).
+      operationId: parseCandidateFile
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: Parsed rows with per-row problems for review.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rows]
+                properties:
+                  rows:
+                    type: array
+                    items: { $ref: "#/components/schemas/ParsedCandidateRow" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "415":
+          description: "Problem type: unsupported-file-type (template mismatch)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/positions/{position_id}/invites:
+    post:
+      tags: [Hiring]
+      summary: Send invites
+      description: >
+        The T-7 transaction (FR-HIR-008): freezes the assessment on first send (FR-HIR-005), issues
+        each candidate a unique token bound to org/position/candidate (FR-IDA-011) with the
+        position's expiry, and queues each invite email (E-2) with the token link in the URL
+        fragment. One attempt per drill per the assessment rules. Requires Idempotency-Key
+        (ADR-0040); email dedupe per token backstops at-most-once sends.
+      operationId: sendInvites
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidate_ids]
+              properties:
+                candidate_ids:
+                  type: array
+                  minItems: 1
+                  items: { type: string, format: uuid }
+                expiry_days:
+                  type: integer
+                  minimum: 1
+                  maximum: 60
+                  description: Overrides the position preset for this send (FR-HIR-008; default 7).
+                invite_template:
+                  type: [string, "null"]
+                  description: Edited email body for this send; null uses the position template.
+      responses:
+        "202":
+          description: Tokens issued; emails queued; assessment frozen from the first send.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [invites_queued, assessment_frozen]
+                properties:
+                  invites_queued: { type: integer, minimum: 1 }
+                  assessment_frozen: { type: boolean }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: assessment-empty, position-closed, idempotency-key-reuse."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem types: validation-error; idempotency-key-required when the header is missing (gate F-5)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/candidates/{candidate_id}:
+    patch:
+      tags: [Hiring]
+      summary: Update a candidate's internal note
+      description: >
+        Edits the manager-private internal note (FR-HIR-006) that resurfaces on the report
+        (FR-HIR-011). Never reaches anything a candidate can see; excluded from the PDF by
+        construction (FR-HIR-012).
+      operationId: updateCandidate
+      parameters:
+        - $ref: "#/components/parameters/CandidateIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [internal_note]
+              properties:
+                internal_note: { type: [string, "null"], maxLength: 4000 }
+      responses:
+        "200":
+          description: Updated pipeline row.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PipelineCandidate" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: position-closed."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/candidates/{candidate_id}/invite-resend:
+    post:
+      tags: [Hiring]
+      summary: Resend an invite
+      description: >
+        Re-sends the templated invite with a fresh token and reset expiry; the prior token stays
+        valid until its own original expiry (FR-HIR-009, FR-IDA-012, AC-IDA-005). Confirmation is
+        client-side. A resend after expiry-mid-assessment resumes the same assessment state
+        (FR-CND-011). Throttled per 05-rate-limits §5.
+      operationId: resendInvite
+      parameters:
+        - $ref: "#/components/parameters/CandidateIdParam"
+      responses:
+        "202":
+          description: Fresh token issued; email queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [expires_at]
+                properties:
+                  expires_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: position-closed, assessment-completed (nothing to resend for a completed candidate)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/candidates/{candidate_id}/report:
+    get:
+      tags: [Hiring]
+      summary: Candidate report
+      description: >
+        The manager-facing report (FR-HIR-011): identity and position, drills completed and total
+        time, overall score (unweighted mean of per-drill overalls, AC-HIR-003) tier-banded, the
+        internal note (visually distinct from AI content), the AI cross-drill takeaway, and one
+        card per drill — call type, buyer persona, duration, score, restart flag — each opening the
+        full review with weights (FR-SCR-018/017). Incomplete candidates report every completed
+        drill (FR-HIR-016). pdf_status drives the download affordance (FR-HIR-012).
+      operationId: getCandidateReport
+      parameters:
+        - $ref: "#/components/parameters/CandidateIdParam"
+      responses:
+        "200":
+          description: Report.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CandidateReport" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/candidates/{candidate_id}/report/pdf:
+    get:
+      tags: [Hiring]
+      summary: Get the report PDF download URL
+      description: >
+        Returns a short-lived download URL for the concealment-safe PDF (FR-HIR-012): the report
+        minus the internal note and every concealed element (AC-HIR-004) — the single format that
+        serves both HR attachment and the candidate's own copy. Not yet rendered: 409 pdf-not-ready
+        with meta.pdf_status.
+      operationId: getReportPdf
+      parameters:
+        - $ref: "#/components/parameters/CandidateIdParam"
+      responses:
+        "200":
+          description: Time-limited download URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expires_at]
+                properties:
+                  url: { type: string, format: uri }
+                  expires_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: pdf-not-ready (meta.pdf_status)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/candidates/{candidate_id}/report/render:
+    post:
+      tags: [Hiring]
+      summary: Re-request PDF rendering
+      description: >
+        Idempotent render request (gate F-7): enqueues rendering when pdf_status is none or failed
+        (FR-HIR-012 availability); when a render is already pending or the PDF is available, the
+        call is a no-op. Either way it answers 202 with the current pdf_status — poll the report.
+        Rendering normally happens automatically at completion.
+      operationId: renderReportPdf
+      parameters:
+        - $ref: "#/components/parameters/CandidateIdParam"
+      responses:
+        "202":
+          description: Current pdf_status (render enqueued when it was none or failed).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pdf_status]
+                properties:
+                  pdf_status: { $ref: "#/components/schemas/PdfStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/candidates/{candidate_id}/decision:
+    put:
+      tags: [Hiring]
+      summary: Decide a candidate
+      description: >
+        Approve or reject (FR-HIR-013); leaving pending is not a decision. Changeable while the
+        candidate is not in any sent shortlist; after that the decision is frozen (409,
+        AC-HIR-005). A reject under report policy rejected_only triggers the candidate's report
+        email (FR-CND-012). Approve-and-next routing is client-side over the review_queue view.
+      operationId: putDecision
+      parameters:
+        - $ref: "#/components/parameters/CandidateIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [approved, rejected] }
+      responses:
+        "200":
+          description: Decision recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PipelineCandidate" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: decision-frozen, candidate-not-decidable, position-closed."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/hr-contacts:
+    get:
+      tags: [Hiring]
+      summary: Saved HR contacts
+      description: The manager's persistent HR recipient list (FR-HIR-014). Personal to the manager; never transfers with a position (FR-HIR-018).
+      operationId: listHrContacts
+      responses:
+        "200":
+          description: Contacts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/HrContact" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Hiring]
+      summary: Save an HR contact
+      operationId: createHrContact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+                label: { type: [string, "null"], maxLength: 200 }
+      responses:
+        "201":
+          description: Saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HrContact" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: "Problem type: duplicate-email (already saved by this manager)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/hr-contacts/{contact_id}:
+    delete:
+      tags: [Hiring]
+      summary: Remove an HR contact
+      operationId: deleteHrContact
+      parameters:
+        - name: contact_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Removed.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/positions/{position_id}/shortlists:
+    post:
+      tags: [Hiring]
+      summary: Send a shortlist to HR
+      description: >
+        The T-9 transaction (FR-HIR-014): one email (E-4) to recipients chosen from saved HR
+        contacts plus free-entry addresses (validated for form), editable body, each included
+        candidate's concealment-safe PDF attached. Validation is atomic (gate F-3): every listed
+        candidate_id must be approved and not yet in any sent shortlist, or the whole request
+        answers 422 with per-id errors[] — nothing partial ever sends. Held-back candidates are
+        simply omitted and stay approved for a later batch (AC-HIR-006). Inclusion freezes each
+        included decision (FR-HIR-013). Requires Idempotency-Key (ADR-0040).
+      operationId: sendShortlist
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidate_ids, recipients, body]
+              properties:
+                candidate_ids:
+                  type: array
+                  minItems: 1
+                  items: { type: string, format: uuid }
+                recipients:
+                  type: array
+                  minItems: 1
+                  items: { type: string, format: email }
+                body: { type: string, minLength: 1 }
+      responses:
+        "202":
+          description: Shortlist recorded; email queued; included decisions frozen.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [shortlist_id, included_candidate_ids, sent_at]
+                properties:
+                  shortlist_id: { type: string, format: uuid }
+                  included_candidate_ids:
+                    type: array
+                    items: { type: string, format: uuid }
+                  sent_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: shortlist-empty (no includable candidates), position-closed, idempotency-key-reuse."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem types: validation-error (including ineligible candidate_ids — atomic, per-id errors[]); idempotency-key-required when the header is missing (gate F-3/F-5)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/positions/{position_id}/close:
+    post:
+      tags: [Hiring]
+      summary: Close a position
+      description: >
+        The T-8 transaction (FR-HIR-015): expires all outstanding invite tokens, stops further
+        candidate entry, keeps the position and every report readable in a read-only archive
+        (AC-HIR-007). Idempotent: closing a closed position answers 200.
+      operationId: closePosition
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+      responses:
+        "200":
+          description: Closed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PositionDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Candidate assessment surface ─────────────────────────────
+
+  /api/v1/assessment:
+    get:
+      tags: [Assessment]
+      summary: My assessment (entry, plan, or completion)
+      description: >
+        The candidate's whole context, token-authenticated (FR-CND-001): personalized welcome
+        naming them, the position, and the hiring org; gate state (pre-flight, consent, terms);
+        the plan — stages in frozen order, each completed / next / upcoming / closed_incomplete,
+        only the next stage openable (FR-CND-004, AC-CND-002); progress; re-entry resumes here
+        including across devices (FR-CND-009, AC-CND-005). After completion the token admits only
+        this endpoint's terminal completion state (FR-CND-008, FR-IDA-013). No score, review, or
+        evaluation of any kind appears anywhere on this surface (FR-CND-007, AC-CND-003). Expired
+        tokens: 401 token-expired with the expiry explanation (AC-IDA-004); completed stages stay
+        submitted and graded (FR-CND-011).
+      operationId: getAssessment
+      security:
+        - candidateToken: []
+      responses:
+        "200":
+          description: Assessment context.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssessmentView" }
+        "401":
+          description: "Problem types: token-invalid, token-expired (meta.expired_at)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/assessment/preflight:
+    post:
+      tags: [Assessment]
+      summary: Submit pre-flight checks, consent, and acceptance
+      description: >
+        Records the hardware/environment check results — microphone, audio output, browser and
+        connection, each independently pass/fail (FR-CND-002) — together with recording consent
+        (CMP-002) and Terms/Privacy acceptance (CMP-005) (FR-CND-003). All checks passing and both
+        instruments selected are required before any call can start (AC-CND-001); failures answer
+        422 listing the failing elements for per-check guidance and retry. Replay after success is
+        a no-op 200.
+      operationId: submitPreflight
+      security:
+        - candidateToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PreflightSubmit" }
+      responses:
+        "200":
+          description: Pre-flight passed; assessment ready.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssessmentView" }
+        "401":
+          description: "Problem types: token-invalid, token-expired."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: "Problem type: assessment-completed."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem type: validation-error — failing checks / unselected instruments in errors[]."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/assessment/stages/{stage_id}/brief:
+    get:
+      tags: [Assessment]
+      summary: Stage brief (candidate chrome)
+      description: >
+        The standard participant-safe brief for the stage's drill, in candidate chrome with stage
+        position (FR-CND-005/006), plus access to the product reference. Only the next stage's
+        brief opens (409 stage-not-next); starting the call is POST /calls with this stage_id.
+      operationId: getStageBrief
+      security:
+        - candidateToken: []
+      parameters:
+        - $ref: "#/components/parameters/StageIdParam"
+      responses:
+        "200":
+          description: Brief with stage position.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StageBriefView" }
+        "401":
+          description: "Problem types: token-invalid, token-expired."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: stage-not-next, preflight-required, assessment-completed."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/assessment/stages/{stage_id}/reference:
+    get:
+      tags: [Assessment]
+      summary: Stage product reference
+      description: >
+        The read-only product reference for the stage's drill (FR-KNW-009 via FR-CND-005) — the
+        frozen snapshot the drill grades against, no other team's facts, no edit affordance
+        (AC-KNW-004).
+      operationId: getStageReference
+      security:
+        - candidateToken: []
+      parameters:
+        - $ref: "#/components/parameters/StageIdParam"
+      responses:
+        "200":
+          description: Reference.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReferenceView" }
+        "401":
+          description: "Problem types: token-invalid, token-expired."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem types: stage-not-next, preflight-required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Ops surface (/ops/v1) ─────────────────────────────
+
+  /ops/v1/session:
+    post:
+      tags: [Ops]
+      summary: Ops sign-in
+      description: Separate surface, separate accounts, separate cookie (ADR-0010, ADR-0037). No customer session can reach /ops/v1.
+      operationId: opsSignIn
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SignInRequest" }
+      responses:
+        "200":
+          description: Ops session established.
+          headers:
+            Set-Cookie:
+              description: "__Host-bluelab_ops_session; HttpOnly; Secure; SameSite=Strict; Path=/"
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ops_account_id, display_name]
+                properties:
+                  ops_account_id: { type: string, format: uuid }
+                  display_name: { type: string }
+        "401":
+          description: "Problem type: invalid-credentials."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    delete:
+      tags: [Ops]
+      summary: Ops sign-out
+      operationId: opsSignOut
+      security:
+        - opsSessionCookie: []
+      responses:
+        "204":
+          description: Ops session destroyed.
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/orgs:
+    post:
+      tags: [Ops]
+      summary: Provision a customer org
+      description: Creates the tenancy shell with its civil-calendar timezone (ops verb provision_org; audited with reason).
+      operationId: opsCreateOrg
+      security:
+        - opsSessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, reason]
+              properties:
+                name: { type: string, minLength: 1 }
+                timezone: { type: string, default: Africa/Cairo, description: IANA zone — the org's civil calendar (data 01 §2). }
+                reason: { type: string, minLength: 1 }
+      responses:
+        "201":
+          description: Org created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [org_id, name, timezone]
+                properties:
+                  org_id: { type: string, format: uuid }
+                  name: { type: string }
+                  timezone: { type: string }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "422":
+          description: "Problem types: validation-error, reason-required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/accounts:
+    post:
+      tags: [Ops]
+      summary: Provision an account (roster entry)
+      description: >
+        Creates an account from a roster entry — email, role, org, and for a rep their manager
+        (FR-IDA-001); no self-registration exists anywhere (FR-IDA-002). Sends the credentials
+        email E-1 (FR-IDA-003). Audited with reason (ADR-0010).
+      operationId: opsCreateAccount
+      security:
+        - opsSessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OpsAccountCreate" }
+      responses:
+        "201":
+          description: Account created; credentials email queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, email, role]
+                properties:
+                  account_id: { type: string, format: uuid }
+                  email: { type: string, format: email }
+                  role: { type: string, enum: [manager, rep] }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: duplicate-email (platform-wide username)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem types: validation-error, reason-required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/accounts/{account_id}/deactivate:
+    post:
+      tags: [Ops]
+      summary: Deactivate an account
+      description: >
+        Refuses all further authentication while preserving historical records unaltered
+        (FR-IDA-010, AC-IDA-003). Deactivating a manager who still owns reps or open positions is
+        blocked (409 manager-owns-dependents) until ops reassigns them. Idempotent.
+      operationId: opsDeactivateAccount
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OpsAccountIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OpsReasonBody" }
+      responses:
+        "200":
+          description: Deactivated (or already deactivated).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, status]
+                properties:
+                  account_id: { type: string, format: uuid }
+                  status: { type: string, enum: [deactivated] }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: manager-owns-dependents (meta.reps, meta.open_positions)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem type: reason-required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/accounts/{account_id}/team-change:
+    post:
+      tags: [Ops]
+      summary: Reassign a rep to another manager
+      description: >
+        Changes the rep↔manager mapping — ops-only (FR-IDA-009); the rep's history follows them
+        into the new team's views (data 00 §3 scope cascade). Audited with reason.
+      operationId: opsChangeTeam
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OpsAccountIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_manager_account_id, reason]
+              properties:
+                new_manager_account_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Mapping changed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, team_id]
+                properties:
+                  account_id: { type: string, format: uuid }
+                  team_id: { type: string, format: uuid }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: "Problem types: validation-error (target not an active manager in the same org), reason-required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/positions/{position_id}/transfer:
+    post:
+      tags: [Ops]
+      summary: Transfer a position to another manager
+      description: >
+        Carries the position with its assessment, candidates, reports, decisions, and internal
+        notes to the new owner; the former owner loses all access; saved HR lists do not transfer
+        (FR-HIR-018 — one team_id update cascading the subtree, data 00 §3). Audited with reason.
+      operationId: opsTransferPosition
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/PositionIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_manager_account_id, reason]
+              properties:
+                new_manager_account_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Transferred.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [position_id, team_id]
+                properties:
+                  position_id: { type: string, format: uuid }
+                  team_id: { type: string, format: uuid }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422":
+          description: "Problem types: validation-error, reason-required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/faults:
+    get:
+      tags: [Ops]
+      summary: Fault queue
+      description: >
+        The operational fault queue raised by grading failure (FR-SCR-009) and playback-asset
+        faults (FR-SCR-013), oldest first. Fault records carry ids and states, never customer
+        content (ADR-0010 §4).
+      operationId: opsListFaults
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, resolved, all], default: open }
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Faults page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/FaultView" }
+                  pagination: { $ref: "#/components/schemas/CursorPage" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/faults/{fault_id}/resolve:
+    post:
+      tags: [Ops]
+      summary: Resolve a fault (re-drive the job)
+      description: >
+        Re-drives the underlying job by identity — grading re-enqueued for grading_failure;
+        recording re-check for playback_asset. Resolution works on fault records, not customer
+        content (ADR-0010). When the re-driven grading succeeds, the original call's full review
+        appears (AC-SCR-005).
+      operationId: opsResolveFault
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - name: fault_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, description: Resolution note; audited. }
+      responses:
+        "200":
+          description: Fault resolved; job re-driven.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FaultView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: fault-already-resolved."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem type: reason-required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/erasure-requests:
+    get:
+      tags: [Ops]
+      summary: List erasure requests
+      operationId: opsListErasureRequests
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Requests page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ErasureRequestView" }
+                  pagination: { $ref: "#/components/schemas/CursorPage" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Ops]
+      summary: Create an erasure request (CMP-001)
+      description: >
+        Queues subject erasure — account or candidate — executed by the dedicated procedure that
+        removes the person and leaves the statistical residue, reaching the object store as well
+        (ADR-0033, data 03 §3). Audited with reason; evidence counts land on the request.
+      operationId: opsCreateErasureRequest
+      security:
+        - opsSessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubjectRequestCreate" }
+      responses:
+        "202":
+          description: Erasure queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErasureRequestView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404":
+          description: "Problem type: subject-unknown."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem types: validation-error, reason-required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/erasure-requests/{request_id}:
+    get:
+      tags: [Ops]
+      summary: Erasure request status
+      operationId: opsGetErasureRequest
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/RequestIdParam"
+      responses:
+        "200":
+          description: Request with status and evidence.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErasureRequestView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/export-requests:
+    get:
+      tags: [Ops]
+      summary: List export requests
+      operationId: opsListExportRequests
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Requests page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ExportRequestView" }
+                  pagination: { $ref: "#/components/schemas/CursorPage" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Ops]
+      summary: Create a data export request (CMP-001)
+      description: Queues a subject data-export bundle; the bundle auto-expires (data 03 §2). Audited with reason.
+      operationId: opsCreateExportRequest
+      security:
+        - opsSessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubjectRequestCreate" }
+      responses:
+        "202":
+          description: Export queued.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExportRequestView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404":
+          description: "Problem type: subject-unknown."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422":
+          description: "Problem types: validation-error, reason-required."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ValidationProblem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/export-requests/{request_id}:
+    get:
+      tags: [Ops]
+      summary: Export request status (bundle link when ready)
+      operationId: opsGetExportRequest
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/RequestIdParam"
+      responses:
+        "200":
+          description: Request; when ready carries a time-limited bundle URL.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExportRequestView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/audit:
+    get:
+      tags: [Ops]
+      summary: Ops audit trail
+      description: Every ops action with actor, verb, target org, target refs, and reason — append-only (ADR-0010 §3).
+      operationId: opsListAudit
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - name: org_id
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/LimitParam"
+      responses:
+        "200":
+          description: Audit page, newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEntry" }
+                  pagination: { $ref: "#/components/schemas/CursorPage" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ───────────────────────────── Integration hooks ─────────────────────────────
+
+  /hooks/livekit:
+    post:
+      tags: [Hooks]
+      summary: LiveKit webhook receiver
+      description: >
+        Receives LiveKit webhook events (Content-Type application/webhook+json; Authorization
+        header carries the LiveKit-signed JWT with a SHA-256 of the payload — validated with the
+        server SDK receiver). Reconciliation-only consumer (ADR-0038): egress_ended flips the
+        attempt's recording status (FR-SCR-013 path on failure); room_finished /
+        participant_connection_aborted accelerate interruption reconciliation; everything else is
+        acknowledged and dropped. Idempotent per event id. Never the primary domain-state driver
+        (01-realtime-call-contract §7).
+      operationId: receiveLivekitWebhook
+      security:
+        - livekitWebhook: []
+      requestBody:
+        required: true
+        content:
+          application/webhook+json:
+            schema: { $ref: "#/components/schemas/LivekitWebhookEvent" }
+      responses:
+        "204":
+          description: Event accepted (including valid-but-unconsumed event types).
+        "401":
+          description: "Problem type: webhook-signature-invalid."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+components:
+
+  parameters:
+    CursorParam:
+      name: cursor
+      in: query
+      description: Opaque pagination cursor from a previous response.
+      schema: { type: string }
+    LimitParam:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+    MonthParam:
+      name: month
+      in: query
+      description: Calendar month YYYY-MM, interpreted in the org's timezone (data 02 §3 V-1). Defaults to the org's current month.
+      schema: { $ref: "#/components/schemas/Month" }
+    DrillIdParam:
+      name: drill_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DocumentIdParam:
+      name: document_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    AttemptIdParam:
+      name: attempt_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PositionIdParam:
+      name: position_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CandidateIdParam:
+      name: candidate_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    StageIdParam:
+      name: stage_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OpsAccountIdParam:
+      name: account_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RequestIdParam:
+      name: request_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >
+        Client-generated UUID; same key + same body replays the stored response, same key +
+        different body answers 409 idempotency-key-reuse; stored 24 h per principal (ADR-0040).
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: "Problem type: session-invalid (missing/expired/revoked session)."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    OpsUnauthorized:
+      description: "Problem type: ops-session-invalid."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: >
+        Problem type: not-found. Also the uniform answer for any resource outside the caller's
+        scope — indistinguishable from absence in status, body, and timing (ADR-0036,
+        AC-IDA-006/007).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    ValidationError:
+      description: "Problem type: validation-error, with field-level errors[]."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ValidationProblem" }
+    RateLimited:
+      description: "Problem type: rate-limited (05-rate-limits-and-quotas)."
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+
+    # ── Cross-cutting primitives ──
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details; registry in 03-error-catalog.api.md (ADR-0036).
+      required: [type, title, status]
+      properties:
+        type: { type: string, description: "Stable origin-relative problem URI, e.g. /problems/allowance-exhausted." }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        request_id: { type: string }
+        meta:
+          type: object
+          description: Typed per-problem extension members (03-error-catalog per type).
+          additionalProperties: true
+      example:
+        type: /problems/allowance-exhausted
+        title: Attempts allowance exhausted
+        status: 409
+        detail: This assigned drill has used 3 of 3 allowed attempts.
+        request_id: req_0197f3a1
+        meta: { attempts_used: 3, attempts_allowed: 3 }
+
+    ValidationProblem:
+      allOf:
+        - $ref: "#/components/schemas/Problem"
+        - type: object
+          properties:
+            errors:
+              type: array
+              items:
+                type: object
+                required: [field, message]
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+
+    CursorPage:
+      type: object
+      required: [next_cursor, has_more]
+      properties:
+        next_cursor: { type: [string, "null"] }
+        has_more: { type: boolean }
+
+    Month:
+      type: string
+      pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+      description: Calendar month in the org's timezone.
+
+    CallType:
+      type: string
+      enum: [discovery, post_proposal, renewal, upsell]
+      description: The four call types (FR-DRL-001).
+
+    LeadType:
+      type: string
+      enum: [inbound_quote, referral, cold_outreach]
+      description: Discovery-only lead type (FR-DRL-001).
+
+    Band:
+      type: string
+      enum: [green, amber, red]
+      description: "Tier band, computed server-side by the single banding rule: green ≥ 7.5, amber ≥ 5.5, red below (FR-SCR-005)."
+
+    ScoreBand:
+      type: object
+      description: A score always travels with its band; clients render, never re-derive (FR-SCR-005).
+      required: [score, band]
+      properties:
+        score: { type: number, minimum: 0, maximum: 10, description: One decimal. }
+        band: { $ref: "#/components/schemas/Band" }
+
+    # ── Legal & auth ──
+
+    LegalDocuments:
+      type: object
+      required: [recording_consent_notice, terms_of_use, privacy_notice]
+      properties:
+        recording_consent_notice: { $ref: "#/components/schemas/LegalDocumentVersion" }
+        terms_of_use: { $ref: "#/components/schemas/LegalDocumentVersion" }
+        privacy_notice: { $ref: "#/components/schemas/LegalDocumentVersion" }
+
+    LegalDocumentVersion:
+      type: object
+      required: [version, effective_at, url]
+      properties:
+        version: { type: string }
+        effective_at: { type: string, format: date-time }
+        url: { type: string, format: uri, description: The document text (counsel-owned). }
+
+    SignInRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    SessionView:
+      type: object
+      required: [account_id, display_name, email, role, org, pending_gates]
+      properties:
+        account_id: { type: string, format: uuid }
+        display_name: { type: string }
+        email: { type: string, format: email }
+        role: { type: string, enum: [manager, rep], description: Role selects which product surfaces exist (FR-IDA-007). }
+        team_id: { type: string, format: uuid, description: The owning manager's account id (FR-IDA-009). }
+        org:
+          type: object
+          required: [id, name, timezone]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            timezone: { type: string }
+        pending_gates:
+          type: array
+          description: Gates blocking full access; empty when none (00-contract-overview §3).
+          items:
+            type: string
+            enum: [first_sign_in, consent, terms]
+
+    FirstSignInRequest:
+      type: object
+      description: All three actions on one screen; any subset alone does not grant access (FR-IDA-004).
+      required: [new_password, consent, terms_accepted]
+      properties:
+        new_password: { type: string, minLength: 12, maxLength: 1024, description: "Policy floor is 12 (platform.security.passwords.MIN_LENGTH); the ceiling bounds argon2id's memory cost per request." }
+        consent:
+          type: boolean
+          description: The recording-consent checkbox — its own distinct, never pre-selected control (CMP-002). Must be true; false answers 422 and records nothing (AC-IDA-002).
+        terms_accepted:
+          type: boolean
+          description: Terms of Use + Privacy Notice acknowledgment — a separate instrument from consent (CMP-005). Must be true.
+
+    AcceptancesRequest:
+      type: object
+      description: Supply only the pending instruments (CMP-002/CMP-005 re-request on material change).
+      minProperties: 1
+      properties:
+        consent: { type: boolean }
+        terms_accepted: { type: boolean }
+
+    # ── Rep home ──
+
+    ProgressHome:
+      type: object
+      required: [month, rating, delta, direction, weekly_trend, call_type_cards]
+      properties:
+        month: { $ref: "#/components/schemas/Month" }
+        rating:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreBand"
+            - type: "null"
+          description: Monthly rating; null with no counted attempts this month (FR-TRP-001, formulas FR-TRM-002).
+        delta: { type: [number, "null"], description: Change vs prior month. }
+        direction: { type: [string, "null"], enum: [rising, slipping, flat, null] }
+        weekly_trend:
+          type: array
+          description: Weekly points across the month, scoped by the call_type parameter when given.
+          items:
+            type: object
+            required: [week_start, score]
+            properties:
+              week_start: { type: string, format: date }
+              score: { type: [number, "null"] }
+        call_type_cards:
+          type: array
+          description: One card per call type over the last 30 days, ordered weakest first, weakest tagged (FR-TRP-001).
+          items:
+            type: object
+            required: [call_type, rating, attempts, weakest]
+            properties:
+              call_type: { $ref: "#/components/schemas/CallType" }
+              rating:
+                oneOf:
+                  - $ref: "#/components/schemas/ScoreBand"
+                  - type: "null"
+              attempts: { type: integer, minimum: 0 }
+              weakest: { type: boolean }
+
+    ProfileView:
+      type: object
+      required: [account_id, display_name, email, total_completed_drills, lifetime_rating, badges]
+      properties:
+        account_id: { type: string, format: uuid }
+        display_name: { type: string }
+        email: { type: string, format: email }
+        total_completed_drills: { type: integer, minimum: 0, description: Lifetime graded attempts (FR-TRP-004). }
+        lifetime_rating:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreBand"
+            - type: "null"
+        badges:
+          type: array
+          description: Earned (with winning rule) and locked (with goal); owner-only (FR-TRP-005).
+          items:
+            type: object
+            required: [code, name, rule_text, earned]
+            properties:
+              code: { type: string }
+              name: { type: string }
+              rule_text: { type: string }
+              earned: { type: boolean }
+              earned_at: { type: [string, "null"], format: date-time }
+
+    CoachFeedbackPage:
+      type: object
+      required: [data, unread_count, pagination]
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required: [id, body, created_at, read]
+            properties:
+              id: { type: string, format: uuid }
+              body: { type: string }
+              created_at: { type: string, format: date-time }
+              read: { type: boolean }
+        unread_count: { type: integer, minimum: 0 }
+        pagination: { $ref: "#/components/schemas/CursorPage" }
+
+    # ── Library ──
+
+    LibraryPage:
+      type: object
+      required: [data, counts, pagination]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/LibraryCard" }
+        counts:
+          type: object
+          description: Live per-tab counts (FR-TRP-007).
+          required: [all, assigned, self_authored]
+          properties:
+            all: { type: integer, minimum: 0 }
+            assigned: { type: integer, minimum: 0 }
+            self_authored: { type: integer, minimum: 0 }
+        pagination: { $ref: "#/components/schemas/CursorPage" }
+
+    LibraryCard:
+      type: object
+      description: >
+        One library entry (FR-TRP-006): a practicable drill, or — in the caller's own
+        self_authored source only — one of their drafts (status=draft, marked, not startable;
+        FR-DRL-013). Practicable cards lead to the brief and, when attempted, the history; draft
+        cards lead to authoring.
+      required: [drill_id, status, label, call_type, source, attempted, best]
+      properties:
+        drill_id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, published], description: Drafts appear only for their author (gate F-1). }
+        label: { type: [string, "null"], description: Persona-derived "name · company" (FR-DRL-004); null for drafts without a generated scenario. }
+        call_type: { $ref: "#/components/schemas/CallType" }
+        lead_type:
+          oneOf:
+            - $ref: "#/components/schemas/LeadType"
+            - type: "null"
+        source: { type: string, enum: [assigned, self_authored, library] }
+        attempted: { type: boolean }
+        best:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreBand"
+            - type: "null"
+          description: The rep's best score, or null when unattempted.
+        assignment:
+          type: [object, "null"]
+          description: Present on assigned cards (FR-TRP-006/013).
+          required: [due_date, attempts_used, attempts_allowed, locked]
+          properties:
+            due_date: { type: string, format: date, description: Org-local calendar date. }
+            attempts_used: { type: integer, minimum: 0 }
+            attempts_allowed: { type: integer, minimum: 1 }
+            locked: { type: boolean, description: Allowance exhausted — no call can start until re-assignment (FR-TRP-013). }
+
+    DrillHistory:
+      type: object
+      description: Statistics primitives + attempt list, newest first (FR-SCR-015, FR-TRP-011). Chart points derive client-side by reversing graded attempts (FR-TRP-012).
+      required: [drill_id, stats, attempts]
+      properties:
+        drill_id: { type: string, format: uuid }
+        stats:
+          type: object
+          required: [best, latest, average, trend, graded_attempts]
+          properties:
+            best: { type: [number, "null"] }
+            latest: { type: [number, "null"] }
+            average: { type: [number, "null"] }
+            trend: { type: [number, "null"], description: Latest versus first (FR-SCR-015). }
+            graded_attempts: { type: integer, minimum: 0 }
+        attempts:
+          type: array
+          items:
+            type: object
+            required: [attempt_id, attempt_number, started_at, status, score]
+            properties:
+              attempt_id: { type: string, format: uuid }
+              attempt_number: { type: integer, minimum: 1 }
+              started_at: { type: string, format: date-time }
+              status: { type: string, enum: [in_progress, completed, grading_pending, graded, interrupted] }
+              score:
+                oneOf:
+                  - $ref: "#/components/schemas/ScoreBand"
+                  - type: "null"
+
+    # ── Drills & authoring ──
+
+    AuthoringOption:
+      type: object
+      required: [id, kind, label]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [challenge, hidden_motive] }
+        label: { type: string }
+
+    DrillInputs:
+      type: object
+      description: >
+        Authoring intent (FR-DRL-002). Entries: source=library carries option_id; source=custom
+        carries label (job-relevance-gated, FR-DRL-007). lead_type required iff call_type=discovery
+        (FR-DRL-001). Generation requires ≥ 1 challenge and ≥ 1 hidden motive.
+      required: [call_type, challenges, hidden_motives]
+      properties:
+        call_type: { $ref: "#/components/schemas/CallType" }
+        lead_type:
+          oneOf:
+            - $ref: "#/components/schemas/LeadType"
+            - type: "null"
+        challenges:
+          type: array
+          items: { $ref: "#/components/schemas/ConcealedEntryInput" }
+        hidden_motives:
+          type: array
+          items: { $ref: "#/components/schemas/ConcealedEntryInput" }
+
+    ConcealedEntryInput:
+      type: object
+      required: [source]
+      properties:
+        source: { type: string, enum: [library, custom] }
+        option_id: { type: [string, "null"], format: uuid, description: Required when source=library. }
+        label: { type: [string, "null"], maxLength: 500, description: Required when source=custom. }
+
+    ConcealedEntryView:
+      type: object
+      required: [source, label]
+      properties:
+        source: { type: string, enum: [library, custom] }
+        label: { type: string }
+
+    DrillFull:
+      type: object
+      description: >
+        The full basis — author / owning-team manager only (FR-TRM-010, FR-SCR-017 authorship
+        lift). Contains the concealed set; never serialized to any other viewer (the brief is the
+        participant-safe projection).
+      required: [id, status, self_authored, author_account_id, call_type, language, label, inputs, scenario, rubric, generation, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, published, archived] }
+        self_authored: { type: boolean, description: Rep-private drill (FR-TRP-009). }
+        author_account_id: { type: string, format: uuid }
+        call_type: { $ref: "#/components/schemas/CallType" }
+        lead_type:
+          oneOf:
+            - $ref: "#/components/schemas/LeadType"
+            - type: "null"
+        language: { type: string, enum: [ar-EG], description: Fixed in v1 (FR-DRL-003). }
+        label: { type: [string, "null"], description: Persona-derived; set by generation (FR-DRL-004). }
+        inputs:
+          type: object
+          required: [challenges, hidden_motives]
+          properties:
+            challenges:
+              type: array
+              items: { $ref: "#/components/schemas/ConcealedEntryView" }
+            hidden_motives:
+              type: array
+              items: { $ref: "#/components/schemas/ConcealedEntryView" }
+        scenario:
+          oneOf:
+            - $ref: "#/components/schemas/ScenarioView"
+            - type: "null"
+        rubric:
+          oneOf:
+            - $ref: "#/components/schemas/RubricView"
+            - type: "null"
+        generation: { $ref: "#/components/schemas/GenerationState" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        published_at: { type: [string, "null"], format: date-time }
+        archived_at: { type: [string, "null"], format: date-time }
+
+    ScenarioView:
+      type: object
+      description: Generated scenario, read-only — regenerate, never hand-edit (FR-DRL-005).
+      required: [persona, context, product_references]
+      properties:
+        persona:
+          type: object
+          required: [name, role, company, meta_facts]
+          properties:
+            name: { type: string }
+            role: { type: string }
+            company: { type: string }
+            meta_facts:
+              type: array
+              items: { type: string }
+        context: { type: string, description: "Situation context, varying by call type (FR-DRL-004)." }
+        product_references:
+          type: array
+          items: { type: string }
+          description: Drawn exclusively from published facts (FR-KNW-007).
+
+    RubricView:
+      type: object
+      description: Dimensions with weights and live total; names/rationales generation-fixed (FR-DRL-008/009).
+      required: [dimensions, total]
+      properties:
+        dimensions:
+          type: array
+          items:
+            type: object
+            required: [id, ord, name, weight, rationale]
+            properties:
+              id: { type: string, format: uuid }
+              ord: { type: integer, minimum: 1 }
+              name: { type: string }
+              weight: { type: integer, minimum: 0, maximum: 100 }
+              rationale: { type: string }
+        total: { type: integer, description: Live weight total; publish requires exactly 100 (FR-DRL-010). }
+
+    GenerationState:
+      type: object
+      required: [scenario_status, rubric_status]
+      properties:
+        scenario_status: { type: string, enum: [none, running, succeeded, failed] }
+        rubric_status: { type: string, enum: [none, running, succeeded, failed] }
+        error: { type: [string, "null"], description: Failure reason for retry display (FR-DRL-006). }
+
+    GenerationAccepted:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [queued] }
+
+    BriefView:
+      type: object
+      description: >
+        Participant-safe brief from the frozen scenario (FR-LIV-001). author_recap is present only
+        when the viewer is the drill's author (FR-LIV-002, AC-LIV-002); no other concealed element
+        exists in this projection (FR-SCR-017).
+      required: [drill_id, label, call_type, language, buyer, context, product_summary]
+      properties:
+        drill_id: { type: string, format: uuid }
+        label: { type: string }
+        call_type: { $ref: "#/components/schemas/CallType" }
+        lead_type:
+          oneOf:
+            - $ref: "#/components/schemas/LeadType"
+            - type: "null"
+        language: { type: string, enum: [ar-EG] }
+        buyer:
+          type: object
+          required: [name, role, company, meta_facts]
+          properties:
+            name: { type: string }
+            role: { type: string }
+            company: { type: string }
+            meta_facts:
+              type: array
+              items: { type: string }
+        context: { type: string }
+        product_summary: { type: string, description: Summary with access to the full reference (FR-KNW-009). }
+        author_recap:
+          type: [object, "null"]
+          description: Author-only setup recap; absent for every other viewer.
+          required: [challenges, hidden_motives]
+          properties:
+            challenges:
+              type: array
+              items: { type: string }
+            hidden_motives:
+              type: array
+              items: { type: string }
+
+    ReferenceView:
+      type: object
+      description: >
+        Read-only product reference (FR-KNW-009): the drill's grounded facts — frozen snapshot for
+        published drills — grouped by document with provenance. No identifiers that could support
+        mutation; no edit affordance exists (AC-KNW-004).
+      required: [drill_id, frozen, groups, provenance]
+      properties:
+        drill_id: { type: string, format: uuid }
+        frozen: { type: boolean, description: True when serving a published drill's snapshot; false for an author's draft grounding in current live facts. }
+        groups:
+          type: array
+          items:
+            type: object
+            required: [document_title, facts]
+            properties:
+              document_title: { type: string }
+              facts:
+                type: array
+                items:
+                  type: object
+                  required: [label, value]
+                  properties:
+                    label: { type: string }
+                    value: { type: string }
+                    note: { type: [string, "null"] }
+        provenance:
+          type: object
+          required: [source_documents, published_by, fact_count]
+          properties:
+            source_documents:
+              type: array
+              items: { type: string }
+            published_by: { type: string }
+            fact_count: { type: integer, minimum: 0 }
+            snapshot_at: { type: [string, "null"], format: date-time }
+
+    # ── Knowledge ──
+
+    DocumentSummary:
+      type: object
+      required: [id, title, live_fact_count, live_version, draft, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        live_fact_count: { type: integer, minimum: 0 }
+        live_version: { type: integer, minimum: 0, description: Optimistic-concurrency counter (FR-KNW-011). }
+        draft:
+          type: [object, "null"]
+          description: Draft-in-progress marker (FR-KNW-010); null when none.
+          required: [source, status]
+          properties:
+            source: { type: string, enum: [upload, manual] }
+            status: { type: string, enum: [extracting, pending_review, failed] }
+            failure_reason: { type: [string, "null"] }
+            created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DocumentDetail:
+      allOf:
+        - $ref: "#/components/schemas/DocumentSummary"
+        - type: object
+          required: [live_facts]
+          properties:
+            live_facts:
+              type: array
+              items:
+                type: object
+                required: [id, ord, label, value]
+                properties:
+                  id: { type: string, format: uuid }
+                  ord: { type: integer, minimum: 1 }
+                  label: { type: string }
+                  value: { type: string }
+                  note: { type: [string, "null"] }
+            latest_upload:
+              type: [object, "null"]
+              description: Most recent replacement upload and its extraction state (FR-KNW-003/008).
+              required: [upload_id, filename, status]
+              properties:
+                upload_id: { type: string, format: uuid }
+                filename: { type: string }
+                status: { type: string, enum: [received, extracting, extracted, failed] }
+                failure_reason: { type: [string, "null"] }
+                created_at: { type: string, format: date-time }
+
+    FactInput:
+      type: object
+      required: [label, value]
+      properties:
+        label: { type: string, minLength: 1 }
+        value: { type: string, minLength: 1 }
+        note: { type: [string, "null"] }
+
+    ReviewDiff:
+      type: object
+      description: The replacement reviewed against live facts, every change marked (FR-KNW-005).
+      required: [document_id, based_on_version, warning, entries]
+      properties:
+        document_id: { type: string, format: uuid }
+        based_on_version: { type: integer, minimum: 0, description: Echo in POST /publish (FR-KNW-011). }
+        warning: { type: string, description: Explicit publishing-replaces-current-facts warning. }
+        entries:
+          type: array
+          items:
+            type: object
+            required: [status, label, value]
+            properties:
+              status: { type: string, enum: [changed, added, removed, unchanged] }
+              label: { type: string }
+              value: { type: string }
+              note: { type: [string, "null"] }
+              prior:
+                type: [object, "null"]
+                description: The live fact this row replaces (changed) or removes (removed).
+                required: [label, value]
+                properties:
+                  label: { type: string }
+                  value: { type: string }
+                  note: { type: [string, "null"] }
+
+    # ── Calls & attempts ──
+
+    CallRequest:
+      type: object
+      required: [drill_id]
+      properties:
+        drill_id: { type: string, format: uuid }
+        mode:
+          type: string
+          enum: [attempt, test]
+          default: attempt
+          description: "test = feel-check by the drill's author or the owning team's manager (FR-DRL-012, FR-TRM-010; gate F-10); never graded, leaves no record."
+        stage_id:
+          type: [string, "null"]
+          format: uuid
+          description: Required for candidate calls; must be the plan's next stage (FR-CND-004).
+
+    CallGrant:
+      type: object
+      description: Admission result — connect to LiveKit within the join deadline (01-realtime-call-contract §2).
+      required: [call_id, mode, attempt_id, stage, livekit]
+      properties:
+        call_id: { type: string, format: uuid }
+        mode: { type: string, enum: [attempt, test] }
+        attempt_id: { type: [string, "null"], format: uuid, description: "Null for test calls (no record exists, AC-DRL-005)." }
+        stage:
+          type: [object, "null"]
+          description: Candidate calls only — stage N of M (FR-CND-006).
+          required: [ord, of]
+          properties:
+            ord: { type: integer, minimum: 1 }
+            of: { type: integer, minimum: 1 }
+        livekit:
+          type: object
+          required: [url, room, token, join_deadline_seconds]
+          properties:
+            url: { type: string, format: uri }
+            room: { type: string, description: "call_{call_id} — one room per call." }
+            token: { type: string, description: Single-room JWT with embedded bluelab-buyer dispatch; microphone-only publish. }
+            join_deadline_seconds: { type: integer, description: "Establishment deadline; unmet means never-established, nothing consumed (FR-LIV-016)." }
+      example:
+        call_id: "01980a5e-1111-7abc-9def-0123456789ab"
+        mode: attempt
+        attempt_id: "01980a5e-1111-7abc-9def-0123456789ab"
+        stage: null
+        livekit:
+          url: "wss://project.livekit.cloud"
+          room: "call_01980a5e-1111-7abc-9def-0123456789ab"
+          token: "eyJhbGciOi..."
+          join_deadline_seconds: 60
+
+    AttemptView:
+      type: object
+      description: >
+        The attempt record (FR-SCR-014). grading_pending renders to participants as preparation in
+        progress, never failure (FR-SCR-009). Interrupted attempts are never graded and appear in
+        no statistics (AC-SCR-007).
+      required: [id, drill, status, restart, started_at, review_ready]
+      properties:
+        id: { type: string, format: uuid }
+        drill:
+          type: object
+          required: [id, label, call_type]
+          properties:
+            id: { type: string, format: uuid }
+            label: { type: string }
+            call_type: { $ref: "#/components/schemas/CallType" }
+        status: { type: string, enum: [in_progress, completed, grading_pending, graded, interrupted] }
+        restart: { type: boolean, description: Candidate restart flag (FR-CND-010). }
+        started_at: { type: string, format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        duration_seconds: { type: [integer, "null"], minimum: 0 }
+        review_ready: { type: boolean }
+
+    ReviewView:
+      type: object
+      description: >
+        The complete review (FR-SCR-010) in the viewer's projection: weight appears on
+        rubric_breakdown items only for the drill's author or owning-team manager — the field is
+        absent, not null, otherwise (FR-SCR-017, AC-SCR-003). Content is immutable once delivered
+        (FR-SCR-003).
+      required: [attempt_id, context, drill, buyer, duration_seconds, overall, takeaway, rubric_breakdown, moments, transcript, playback]
+      properties:
+        attempt_id: { type: string, format: uuid }
+        context:
+          type: object
+          description: Replay chrome names whose attempt and its number for manager viewers (FR-TRM-007).
+          required: [viewer]
+          properties:
+            viewer: { type: string, enum: [own, replay] }
+            participant_name: { type: [string, "null"] }
+            attempt_number: { type: [integer, "null"] }
+        drill:
+          type: object
+          required: [id, label, call_type]
+          properties:
+            id: { type: string, format: uuid }
+            label: { type: string }
+            call_type: { $ref: "#/components/schemas/CallType" }
+        buyer:
+          type: object
+          required: [name, role, company]
+          properties:
+            name: { type: string }
+            role: { type: string }
+            company: { type: string }
+        duration_seconds: { type: integer, minimum: 0 }
+        overall: { $ref: "#/components/schemas/ScoreBand" }
+        takeaway: { type: [string, "null"], description: Coach takeaway (FR-SCR-006); English (FR-SCR-008); null only after erasure. }
+        rubric_breakdown:
+          type: array
+          items:
+            type: object
+            required: [dimension_id, name, score, band, note]
+            properties:
+              dimension_id: { type: string, format: uuid }
+              name: { type: string }
+              score: { type: number, minimum: 0, maximum: 10 }
+              band: { $ref: "#/components/schemas/Band" }
+              note: { type: [string, "null"] }
+              weight:
+                type: integer
+                minimum: 0
+                maximum: 100
+                description: Present only for author/team-manager viewers (FR-SCR-017).
+        moments:
+          type: array
+          description: Evidence-anchored moments (FR-SCR-007); amber/red carry quote (verbatim Arabic), try-instead, why-it-matters. Severity filters/sort are client-side over this bounded list (FR-SCR-012).
+          items:
+            type: object
+            required: [id, at_ms, severity, dimension_id]
+            properties:
+              id: { type: string, format: uuid }
+              at_ms: { type: integer, minimum: 0 }
+              severity: { $ref: "#/components/schemas/Band" }
+              dimension_id: { type: string, format: uuid }
+              transcript_seq: { type: [integer, "null"] }
+              quote: { type: [string, "null"], description: "Participant's verbatim words, call language (RTL)." }
+              try_instead: { type: [string, "null"] }
+              why_it_matters: { type: [string, "null"] }
+        transcript:
+          type: array
+          description: Complete timestamped transcript (FR-LIV-007/010); bounded by the 15-minute maximum — returned whole.
+          items:
+            type: object
+            required: [seq, speaker, at_ms, text]
+            properties:
+              seq: { type: integer, minimum: 1 }
+              speaker: { type: string, enum: [participant, buyer] }
+              at_ms: { type: integer, minimum: 0 }
+              text: { type: string }
+        playback:
+          type: object
+          description: >
+            Synchronized playback (FR-SCR-011), pinned to the most coachable moment. When the
+            recording is unavailable the review is still complete and audio is marked unavailable
+            (FR-SCR-013).
+          required: [recording_status, recording_url, open_at_ms, pinned_moment_id]
+          properties:
+            recording_status: { type: string, enum: [pending, available, unavailable, erased, none] }
+            recording_url: { type: [string, "null"], format: uri, description: Short-lived URL when available. }
+            open_at_ms: { type: integer, minimum: 0 }
+            pinned_moment_id: { type: [string, "null"], format: uuid }
+
+    # ── Team (manager) ──
+
+    TeamDashboard:
+      type: object
+      required: [month, team_average, delta, rated_reps, tiering_suppressed, top_performers, needs_coaching, gap_analysis]
+      properties:
+        month: { $ref: "#/components/schemas/Month" }
+        team_average:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreBand"
+            - type: "null"
+        delta: { type: [number, "null"], description: Vs prior month (FR-TRM-004). }
+        rated_reps: { type: integer, minimum: 0 }
+        tiering_suppressed: { type: boolean, description: True under five rated reps (FR-TRM-003). }
+        top_performers: { type: integer, minimum: 0 }
+        needs_coaching: { type: integer, minimum: 0 }
+        gap_analysis:
+          type: array
+          description: Rows sorted widest gap first (FR-TRM-004, AC-TRM-002).
+          items:
+            type: object
+            required: [call_type, top_avg, bottom_half_avg, gap, severity]
+            properties:
+              call_type: { $ref: "#/components/schemas/CallType" }
+              top_avg: { type: [number, "null"] }
+              bottom_half_avg: { type: [number, "null"] }
+              gap: { type: [number, "null"] }
+              severity: { type: string, enum: [high, moderate, none], description: "≥ 2.0 high, ≥ 1.0 moderate." }
+
+    RosterRow:
+      type: object
+      required: [account_id, display_name, tier, rating, counted_attempts]
+      properties:
+        account_id: { type: string, format: uuid }
+        display_name: { type: string }
+        tier: { type: [string, "null"], enum: [top, mid, needs_coaching, null], description: Null while tiering is suppressed (FR-TRM-003). }
+        rating:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreBand"
+            - type: "null"
+        counted_attempts: { type: integer, minimum: 0 }
+        strongest_call_type:
+          oneOf:
+            - $ref: "#/components/schemas/CallType"
+            - type: "null"
+        weakest_call_type:
+          oneOf:
+            - $ref: "#/components/schemas/CallType"
+            - type: "null"
+
+    RepDeepDive:
+      type: object
+      required: [account_id, display_name, month, rating, trend, per_call_type, recent_attempts]
+      properties:
+        account_id: { type: string, format: uuid }
+        display_name: { type: string }
+        month: { $ref: "#/components/schemas/Month" }
+        rating:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreBand"
+            - type: "null"
+        trend: { type: [number, "null"] }
+        per_call_type:
+          type: array
+          items:
+            type: object
+            required: [call_type, rating, counted_attempts]
+            properties:
+              call_type: { $ref: "#/components/schemas/CallType" }
+              rating:
+                oneOf:
+                  - $ref: "#/components/schemas/ScoreBand"
+                  - type: "null"
+              counted_attempts: { type: integer, minimum: 0 }
+        recent_attempts:
+          type: array
+          description: Recent counted attempts, each opening its replay (FR-TRM-006/007).
+          items:
+            type: object
+            required: [attempt_id, drill_label, call_type, started_at, score, attempt_number]
+            properties:
+              attempt_id: { type: string, format: uuid }
+              drill_label: { type: string }
+              call_type: { $ref: "#/components/schemas/CallType" }
+              started_at: { type: string, format: date-time }
+              score: { $ref: "#/components/schemas/ScoreBand" }
+              attempt_number: { type: integer, minimum: 1 }
+
+    CatalogItem:
+      type: object
+      description: Team catalog row — published and drafts (FR-TRM-008).
+      required: [drill_id, label, status, call_type, average_score, total_attempts, updated_at]
+      properties:
+        drill_id: { type: string, format: uuid }
+        label: { type: [string, "null"], description: Null for drafts without a generated scenario. }
+        status: { type: string, enum: [draft, published, archived] }
+        call_type: { $ref: "#/components/schemas/CallType" }
+        average_score:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreBand"
+            - type: "null"
+        total_attempts: { type: integer, minimum: 0 }
+        updated_at: { type: string, format: date-time }
+
+    DrillStats:
+      type: object
+      description: Rollup (FR-SCR-016) + leaderboard (FR-TRM-009).
+      required: [drill_id, rollup, leaderboard]
+      properties:
+        drill_id: { type: string, format: uuid }
+        rollup:
+          type: object
+          required: [team_average, reps_practiced, eligible_reps, total_attempts]
+          properties:
+            team_average:
+              oneOf:
+                - $ref: "#/components/schemas/ScoreBand"
+                - type: "null"
+            reps_practiced: { type: integer, minimum: 0 }
+            eligible_reps: { type: integer, minimum: 0 }
+            total_attempts: { type: integer, minimum: 0 }
+        leaderboard:
+          type: array
+          description: Reps ranked by best score (AC-TRM-004).
+          items:
+            type: object
+            required: [account_id, display_name, best, last_attempt_at, latest_attempt_id]
+            properties:
+              account_id: { type: string, format: uuid }
+              display_name: { type: string }
+              best: { $ref: "#/components/schemas/ScoreBand" }
+              last_attempt_at: { type: string, format: date-time }
+              latest_attempt_id: { type: string, format: uuid, description: Replay entry point (FR-TRM-007). }
+
+    CohortsView:
+      type: object
+      description: Computed quick-pick cohorts (FR-TRM-014).
+      required: [month, bottom_half, rating_below_6, fewer_than_5_attempts, newest_joiners]
+      properties:
+        month: { $ref: "#/components/schemas/Month" }
+        bottom_half:
+          type: array
+          items: { type: string, format: uuid }
+        rating_below_6:
+          type: array
+          items: { type: string, format: uuid }
+        fewer_than_5_attempts:
+          type: array
+          items: { type: string, format: uuid }
+        newest_joiners:
+          type: array
+          items: { type: string, format: uuid }
+
+    AssignmentPut:
+      type: object
+      description: Full-replace assignment (FR-TRM-011/012/013). Re-assignment grants a fresh allowance.
+      required: [recipient_account_ids, due_date, attempts_allowed]
+      properties:
+        recipient_account_ids:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+        due_date: { type: string, format: date, description: Org-local calendar date — due means end of that day in org.timezone. }
+        attempts_allowed: { type: integer, minimum: 1 }
+
+    AssignmentView:
+      type: object
+      required: [drill_id, due_date, attempts_allowed, recipients, updated_at]
+      properties:
+        drill_id: { type: string, format: uuid }
+        due_date: { type: string, format: date }
+        attempts_allowed: { type: integer, minimum: 1 }
+        updated_at: { type: string, format: date-time }
+        recipients:
+          type: array
+          items:
+            type: object
+            required: [account_id, attempts_used, granted_at]
+            properties:
+              account_id: { type: string, format: uuid }
+              attempts_used: { type: integer, minimum: 0 }
+              granted_at: { type: string, format: date-time }
+
+    # ── Hiring ──
+
+    PositionSummary:
+      type: object
+      required: [id, title, status, openings, counts, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string, description: Candidate-facing title (FR-HIR-003). }
+        status: { type: string, enum: [needs_authoring, active, closed] }
+        openings: { type: integer, minimum: 1 }
+        counts:
+          type: object
+          description: Pipeline counts driving the adaptive action (FR-HIR-001/002).
+          required: [invited, pending_review, approved_unsent]
+          properties:
+            invited: { type: integer, minimum: 0 }
+            pending_review: { type: integer, minimum: 0 }
+            approved_unsent: { type: integer, minimum: 0 }
+        created_at: { type: string, format: date-time }
+
+    PositionCreate:
+      type: object
+      required: [title, openings]
+      properties:
+        title: { type: string, minLength: 1 }
+        openings: { type: integer, minimum: 1 }
+        notify_on_completion: { type: boolean, default: false, description: E-5 toggle (FR-HIR-017). }
+        report_policy:
+          type: string
+          enum: [after_finish, rejected_only, withhold]
+          default: rejected_only
+          description: Governs E-3 delivery to candidates (FR-HIR-003, FR-CND-012).
+
+    PositionPatch:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1 }
+        openings: { type: integer, minimum: 1 }
+        notify_on_completion: { type: boolean }
+        report_policy: { type: string, enum: [after_finish, rejected_only, withhold] }
+        invite_expiry_days: { type: integer, minimum: 1, maximum: 60, description: Preset for invite sends (FR-HIR-008; default 7). }
+        invite_template: { type: [string, "null"], description: Editable invite email body (FR-HIR-008/009). }
+
+    PositionDetail:
+      allOf:
+        - $ref: "#/components/schemas/PositionSummary"
+        - type: object
+          required: [notify_on_completion, report_policy, invite_expiry_days, invite_template, language, assessment_frozen, stages]
+          properties:
+            notify_on_completion: { type: boolean }
+            report_policy: { type: string, enum: [after_finish, rejected_only, withhold] }
+            invite_expiry_days: { type: integer, minimum: 1 }
+            invite_template: { type: [string, "null"] }
+            language: { type: string, enum: [ar-EG], description: Displays fixed (FR-HIR-003). }
+            assessment_frozen: { type: boolean, description: Set at first invite; drill set and order immutable after (FR-HIR-005). }
+            stages:
+              type: array
+              description: Frozen stage order candidates face (FR-HIR-004, FR-CND-004).
+              items:
+                type: object
+                required: [stage_id, ord, drill]
+                properties:
+                  stage_id: { type: string, format: uuid }
+                  ord: { type: integer, minimum: 1 }
+                  drill:
+                    type: object
+                    required: [id, label, call_type]
+                    properties:
+                      id: { type: string, format: uuid }
+                      label: { type: string }
+                      call_type: { $ref: "#/components/schemas/CallType" }
+            closed_at: { type: [string, "null"], format: date-time }
+
+    PipelinePage:
+      type: object
+      required: [view, counts, data, pagination]
+      properties:
+        view: { type: string, enum: [pipeline, review_queue, approved] }
+        counts:
+          type: object
+          description: Live tab counts (FR-HIR-010).
+          required: [pipeline, review_queue, approved]
+          properties:
+            pipeline: { type: integer, minimum: 0 }
+            review_queue: { type: integer, minimum: 0 }
+            approved: { type: integer, minimum: 0 }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/PipelineCandidate" }
+        pagination: { $ref: "#/components/schemas/CursorPage" }
+
+    PipelineCandidate:
+      type: object
+      description: >
+        Pipeline row (FR-HIR-010): journey state, decision state, latest invite delivery
+        (delivered-vs-ignored honesty), incomplete marker (FR-HIR-016). internal_note appears only
+        on this manager surface — never in anything a candidate can see (FR-HIR-006).
+      required: [candidate_id, name, email, journey_state, expired_incomplete, decision, decision_frozen, overall, any_restart]
+      properties:
+        candidate_id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: [string, "null"] }
+        linkedin: { type: [string, "null"] }
+        source: { type: [string, "null"] }
+        internal_note: { type: [string, "null"] }
+        journey_state: { type: string, enum: [invited, in_progress, completed] }
+        expired_incomplete: { type: boolean, description: "Token expired with the assessment unfinished (FR-CND-011, FR-HIR-016)." }
+        decision: { type: string, enum: [pending, approved, rejected] }
+        decision_frozen: { type: boolean, description: Included in a sent shortlist (FR-HIR-013). }
+        invite:
+          type: [object, "null"]
+          required: [last_sent_at, delivery_status, expires_at]
+          properties:
+            last_sent_at: { type: [string, "null"], format: date-time }
+            delivery_status: { type: [string, "null"], enum: [queued, sent, delivered, bounced, delayed, failed, null] }
+            expires_at: { type: [string, "null"], format: date-time }
+        overall:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreBand"
+            - type: "null"
+          description: Unweighted mean of graded drills; ranks the review queue (FR-HIR-010/011).
+        any_restart: { type: boolean }
+
+    CandidateCreate:
+      type: object
+      required: [name, email]
+      properties:
+        name: { type: string, minLength: 1 }
+        email: { type: string, format: email }
+        phone: { type: [string, "null"] }
+        linkedin: { type: [string, "null"] }
+        source: { type: [string, "null"] }
+        internal_note: { type: [string, "null"], maxLength: 4000, description: Manager-private (FR-HIR-006). }
+
+    ParsedCandidateRow:
+      type: object
+      description: A parsed template row for batch review — nothing is created from parsing (FR-HIR-007).
+      required: [problems]
+      properties:
+        name: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        phone: { type: [string, "null"] }
+        linkedin: { type: [string, "null"] }
+        source: { type: [string, "null"] }
+        problems:
+          type: array
+          items: { type: string }
+
+    PdfStatus:
+      type: string
+      enum: [none, pending, available, failed, erased]
+
+    CandidateReport:
+      type: object
+      description: >
+        The manager-facing report (FR-HIR-011). The PDF renders this minus internal_note and every
+        concealed element (FR-HIR-012, AC-HIR-004).
+      required: [candidate, position, incomplete, drills_completed, drills_total, total_seconds, overall, internal_note, takeaway, drill_cards, pdf_status]
+      properties:
+        candidate:
+          type: object
+          required: [id, name, email]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string }
+            email: { type: string, format: email }
+            phone: { type: [string, "null"] }
+            linkedin: { type: [string, "null"] }
+            source: { type: [string, "null"] }
+        position:
+          type: object
+          required: [id, title]
+          properties:
+            id: { type: string, format: uuid }
+            title: { type: string }
+        incomplete: { type: boolean, description: Assessment ended incomplete; every completed drill is still graded and reported (FR-HIR-016). }
+        drills_completed: { type: integer, minimum: 0 }
+        drills_total: { type: integer, minimum: 1 }
+        total_seconds: { type: [integer, "null"], description: Sum of actual call durations (FR-HIR-011). }
+        overall:
+          oneOf:
+            - $ref: "#/components/schemas/ScoreBand"
+            - type: "null"
+          description: Unweighted mean of per-drill overalls (AC-HIR-003).
+        internal_note: { type: [string, "null"], description: Visually distinct from AI content; never in the PDF. }
+        takeaway: { type: [string, "null"], description: AI cross-drill takeaway (C-6 synthesis). }
+        drill_cards:
+          type: array
+          items:
+            type: object
+            required: [stage_ord, attempt_id, drill_label, call_type, buyer_name, duration_seconds, score, restart]
+            properties:
+              stage_ord: { type: integer, minimum: 1 }
+              attempt_id: { type: string, format: uuid, description: Opens the full review read-only with weights (FR-SCR-018). }
+              drill_label: { type: string }
+              call_type: { $ref: "#/components/schemas/CallType" }
+              buyer_name: { type: string }
+              duration_seconds: { type: integer, minimum: 0 }
+              score: { $ref: "#/components/schemas/ScoreBand" }
+              restart: { type: boolean, description: "Restart flag surfaced to the manager (FR-CND-010, AC-CND-004)." }
+        pdf_status: { $ref: "#/components/schemas/PdfStatus" }
+
+    HrContact:
+      type: object
+      required: [id, email, label, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        label: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+
+    # ── Candidate assessment surface ──
+
+    AssessmentView:
+      type: object
+      description: >
+        The candidate's full context (FR-CND-001/004/008/009). No score, review, or evaluative
+        content exists anywhere in this schema (FR-CND-007, FR-SCR-018, AC-CND-003).
+      required: [candidate_name, position_title, org_name, language, state, gates, progress, stages, completion]
+      properties:
+        candidate_name: { type: string }
+        position_title: { type: string }
+        org_name: { type: string }
+        language: { type: string, enum: [ar-EG], description: Displayed at pre-flight (FR-CND-003). }
+        state: { type: string, enum: [preflight_required, ready, in_progress, completed] }
+        gates:
+          type: object
+          required: [preflight_passed, consent_recorded, terms_accepted]
+          properties:
+            preflight_passed: { type: boolean }
+            consent_recorded: { type: boolean }
+            terms_accepted: { type: boolean }
+        progress:
+          type: object
+          required: [completed, total]
+          properties:
+            completed: { type: integer, minimum: 0 }
+            total: { type: integer, minimum: 1 }
+        stages:
+          type: array
+          description: Frozen order; only the next stage can open its brief (FR-CND-004, AC-CND-002).
+          items:
+            type: object
+            required: [stage_id, ord, status, call_type, label, restart_available]
+            properties:
+              stage_id: { type: string, format: uuid }
+              ord: { type: integer, minimum: 1 }
+              status: { type: string, enum: [completed, next, upcoming, closed_incomplete] }
+              call_type: { $ref: "#/components/schemas/CallType" }
+              label: { type: [string, "null"], description: Persona label for completed/next stages; null while upcoming (revealed at the brief). }
+              restart_available: { type: boolean, description: One restart after interruption; second interruption consumes the stage (FR-CND-010). }
+        completion:
+          type: [object, "null"]
+          description: Terminal completion state (FR-CND-008) — the only state a completed token admits (FR-IDA-013).
+          required: [completed_at, stages_completed, total_seconds]
+          properties:
+            completed_at: { type: string, format: date-time }
+            stages_completed: { type: integer, minimum: 0 }
+            total_seconds: { type: integer, minimum: 0 }
+
+    PreflightSubmit:
+      type: object
+      description: >
+        Hardware/environment checks — each independently pass/fail (FR-CND-002) — plus recording
+        consent (CMP-002) and Terms/Privacy acceptance (CMP-005), distinct instruments (FR-CND-003).
+        All five must be true for the assessment to start; failures answer 422 with per-element
+        guidance handles.
+      required: [checks, consent, terms_accepted]
+      properties:
+        checks:
+          type: object
+          required: [microphone, audio_output, connection]
+          properties:
+            microphone: { type: boolean }
+            audio_output: { type: boolean }
+            connection: { type: boolean, description: Browser and connection suitability (NFR-007). }
+        consent: { type: boolean }
+        terms_accepted: { type: boolean }
+
+    StageBriefView:
+      description: >
+        Candidate-chrome brief. The inherited author_recap field never appears for candidate
+        viewers — a candidate is never a drill's author (FR-SCR-017); asserted by the Phase 9
+        projection tests (gate F-12 / condition C-1).
+      allOf:
+        - $ref: "#/components/schemas/BriefView"
+        - type: object
+          required: [stage]
+          properties:
+            stage:
+              type: object
+              description: Stage position in candidate chrome (FR-CND-005/006).
+              required: [ord, of]
+              properties:
+                ord: { type: integer, minimum: 1 }
+                of: { type: integer, minimum: 1 }
+
+    # ── Ops ──
+
+    OpsAccountCreate:
+      type: object
+      description: Roster entry (FR-IDA-001); rep entries name their manager (team, FR-IDA-009).
+      required: [org_id, email, display_name, role, reason]
+      properties:
+        org_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string, minLength: 1 }
+        role: { type: string, enum: [manager, rep] }
+        manager_account_id: { type: [string, "null"], format: uuid, description: Required for role=rep. }
+        reason: { type: string, minLength: 1, description: Audit reason (ADR-0010). }
+
+    OpsReasonBody:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1 }
+
+    FaultView:
+      type: object
+      description: Fault-queue record — ids and states, never customer content (ADR-0010 §4).
+      required: [id, org_id, kind, attempt_id, status, opened_at]
+      properties:
+        id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        kind: { type: string, enum: [grading_failure, playback_asset] }
+        attempt_id: { type: string, format: uuid }
+        status: { type: string, enum: [open, resolved] }
+        detail:
+          type: object
+          description: Error class, retry count — content-free.
+          additionalProperties: true
+        opened_at: { type: string, format: date-time }
+        resolved_at: { type: [string, "null"], format: date-time }
+        resolution_note: { type: [string, "null"] }
+
+    SubjectRequestCreate:
+      type: object
+      description: CMP-001 subject-rights request — covers reps, managers, and candidates.
+      required: [org_id, subject_kind, subject_id, reason]
+      properties:
+        org_id: { type: string, format: uuid }
+        subject_kind: { type: string, enum: [account, candidate] }
+        subject_id: { type: string, format: uuid }
+        reason: { type: string, minLength: 1 }
+
+    ErasureRequestView:
+      type: object
+      required: [id, org_id, subject_kind, subject_id, status, requested_at]
+      properties:
+        id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        subject_kind: { type: string, enum: [account, candidate] }
+        subject_id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, executed, failed] }
+        requested_at: { type: string, format: date-time }
+        executed_at: { type: [string, "null"], format: date-time }
+        evidence:
+          type: object
+          description: Per-category row/object counts (data 01 §9).
+          additionalProperties: true
+
+    ExportRequestView:
+      type: object
+      required: [id, org_id, subject_kind, subject_id, status, requested_at]
+      properties:
+        id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        subject_kind: { type: string, enum: [account, candidate] }
+        subject_id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, ready, delivered, failed] }
+        requested_at: { type: string, format: date-time }
+        ready_at: { type: [string, "null"], format: date-time }
+        expires_at: { type: [string, "null"], format: date-time, description: Bundle auto-delete (data 03 §2). }
+        bundle_url: { type: [string, "null"], format: uri, description: Time-limited download when ready. }
+
+    AuditEntry:
+      type: object
+      description: Append-only ops audit (ADR-0010 §3).
+      required: [id, ops_account_id, verb, target_ref, reason, occurred_at]
+      properties:
+        id: { type: string, format: uuid }
+        ops_account_id: { type: string, format: uuid }
+        verb:
+          type: string
+          enum: [provision_org, provision_account, deactivate_account, change_team_mapping, transfer_position, resolve_fault, execute_erasure, execute_export]
+        target_org_id: { type: [string, "null"], format: uuid }
+        target_ref:
+          type: object
+          description: Ids only, never content.
+          additionalProperties: true
+        reason: { type: string }
+        occurred_at: { type: string, format: date-time }
+
+    # ── Integration ──
+
+    LivekitWebhookEvent:
+      type: object
+      description: >
+        LiveKit WebhookEvent envelope (verified 2026-07-23): id, event name, createdAt, plus
+        event-specific payload fields (room, participant, egressInfo). Consumed events:
+        01-realtime-call-contract §7.
+      required: [id, event]
+      properties:
+        id: { type: string }
+        event: { type: string }
+        createdAt: { type: integer, description: UNIX seconds. }
+      additionalProperties: true
+
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-bluelab_session
+      description: Account-holder server-side session (ADR-0037).
+    candidateToken:
+      type: http
+      scheme: bearer
+      description: Candidate capability token from the invite link fragment (FR-IDA-011, ADR-0037).
+    opsSessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-bluelab_ops_session
+      description: BlueLab Internal Operations session — separate surface (ADR-0010).
+    livekitWebhook:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: LiveKit-signed JWT carrying a SHA-256 of the payload (01-realtime-call-contract §7).

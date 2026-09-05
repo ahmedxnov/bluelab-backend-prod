@@ -46,7 +46,7 @@ from bluelab.api.deps import current_manager, current_principal
 
 pytestmark = [pytest.mark.l1_unit, pytest.mark.l7_security]
 
-CONTRACT = Path(__file__).resolve().parents[4] / "api" / "openapi.yaml"
+CONTRACT = Path(__file__).resolve().parents[2] / "contracts" / "platform" / "api" / "openapi.yaml"
 """`api/openapi.yaml` is authoritative (ADR-0035), so the set of manager-only
 operations is read from it rather than restated here. A path prefix would not do:
 `PUT /drills/{drill_id}/assignment` is manager-only and does not live under

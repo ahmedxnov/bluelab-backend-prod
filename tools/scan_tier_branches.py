@@ -51,10 +51,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BUILD_ROOT = REPO_ROOT.parents[1]
 
 BACKEND_SRC = REPO_ROOT / "src"
-FRONTEND_SRC = BUILD_ROOT / "Implementation" / "bluelab-frontend" / "src"
 CONFIG = BACKEND_SRC / "bluelab" / "platform" / "config.py"
 
 PRODUCT_TIER_NAMES = frozenset(
@@ -80,11 +78,6 @@ _TIER_LITERAL = re.compile(r"^(tier[\s_-]?[123]|t[123])$", re.IGNORECASE)
 
 _TIER_TOKEN = re.compile(r"tier", re.IGNORECASE)
 
-_TS_CONDITIONAL = re.compile(r"\b(if|switch)\s*\(|\?[^:]*:|&&|\|\|")
-"""Line-based, because there is no TypeScript parser here. Narrow on purpose: a
-line must look like a conditional *and* mention a tier to be reported."""
-
-
 @dataclass(frozen=True, slots=True)
 class Branch:
     kind: str
@@ -103,7 +96,7 @@ def _rel(path: Path) -> str:
     worse than the finding it was about to report.
     """
     try:
-        return path.relative_to(BUILD_ROOT).as_posix()
+        return path.relative_to(REPO_ROOT).as_posix()
     except ValueError:
         return path.as_posix()
 
@@ -222,36 +215,6 @@ def scan_settings() -> list[Branch]:
     return findings
 
 
-def scan_typescript(root: Path) -> list[Branch]:
-    """The SPA is application code too, and there is no TS parser here.
-
-    Line-based and narrow: a line must both read as a conditional and name a tier.
-    Comment lines are dropped first, so prose about tiers cannot trip it — but this
-    is a weaker instrument than the Python scan, and it says so rather than
-    implying equal rigour.
-    """
-    findings: list[Branch] = []
-    if not root.is_dir():
-        return findings
-    for path in sorted([*root.rglob("*.ts"), *root.rglob("*.tsx")]):
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            stripped = line.strip()
-            if stripped.startswith(("//", "*", "/*")):
-                continue
-            if not _TIER_TOKEN.search(stripped) or not _TS_CONDITIONAL.search(stripped):
-                continue
-            if any(name in stripped.lower() for name in PRODUCT_TIER_NAMES):
-                continue
-            findings.append(
-                Branch(
-                    "tier-branch",
-                    f"{_rel(path)}:{number}",
-                    f"conditional mentions a tier: {stripped[:110]}",
-                )
-            )
-    return findings
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fail on any application branch keyed on the rollout tier."
@@ -264,8 +227,8 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        findings = scan_settings() + scan_python(BACKEND_SRC) + scan_typescript(FRONTEND_SRC)
-        scanned = f"{_rel(BACKEND_SRC)}, frontend src"
+        findings = scan_settings() + scan_python(BACKEND_SRC)
+        scanned = _rel(BACKEND_SRC)
         if args.include_tests:
             findings += scan_python(REPO_ROOT / "tests")
             scanned += ", tests"
