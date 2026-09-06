@@ -15,6 +15,26 @@ checking before first real use.
 
 ---
 
+## CI defects
+
+### OI-21 · First GitHub Actions backend gate is red
+**Status:** verify · **Raised:** Phase 1 Tasks 16–19 runner verification, 2026-09-06 · **Evidence:** [run 33975393447](https://github.com/ahmedxnov/bluelab-backend-prod/actions/runs/33975393447)
+
+The first `backend-ci` run on GitHub-hosted `ubuntu-24.04` for remote commit
+`0ee1ddbc3e7a7c40797d2b7c79eae7af256f559a` failed in **Verify vendored
+boundaries** (exit 1): `verify_contract_lock.py` found that the locked
+`api/openapi.yaml` hash (`2f9ad…55a4`) differs from the vendored file
+(`10d5d…127b2`). The subsequent static, ratchet, test, and container stages were
+skipped. This is a CI defect, not an environment waiver: repair the incompatible
+remote contract snapshot/lock pair and retain a green runner result before treating
+the backend gate as established.
+
+The run also reports the GitHub Actions Node 20 deprecation warning for the pinned
+checkout and setup-python action revisions. Update those action revisions as a
+separate reviewed workflow maintenance change; it did not cause this failure.
+
+---
+
 ## Needs an owner ruling
 
 ### OI-1 · Signature amendment — `api/02 §1.2` and ADR-0071 decision 2
