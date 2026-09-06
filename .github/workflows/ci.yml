@@ -36,8 +36,15 @@ jobs:
           python-version: "3.12.11"
           cache: pip
           cache-dependency-path: requirements-dev.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
       - name: Install the hash-locked toolchain
-        run: python -m pip install --require-hashes -r requirements-dev.lock
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.lock
+          npm ci
       - name: Bootstrap database roles
         env:
           PGPASSWORD: postgres

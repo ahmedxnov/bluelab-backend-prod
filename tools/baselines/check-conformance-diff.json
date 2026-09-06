@@ -1,6 +1,6 @@
 {
   "note": "Contract elements with no implementation yet (api C-2, ADR-0035). This list may only shrink.",
-  "count": 72,
+  "count": 69,
   "gaps": [
     "operation:DELETE /api/v1/calls/current",
     "operation:DELETE /api/v1/drills/{drill_id}/rubric/dimensions/{dimension_id}",
@@ -25,8 +25,6 @@
     "operation:GET /api/v1/product-documents",
     "operation:GET /api/v1/product-documents/{document_id}",
     "operation:GET /api/v1/product-documents/{document_id}/review",
-    "operation:GET /api/v1/team/cohorts",
-    "operation:GET /api/v1/team/drills/{drill_id}/stats",
     "operation:GET /ops/v1/audit",
     "operation:GET /ops/v1/erasure-requests",
     "operation:GET /ops/v1/erasure-requests/{request_id}",
@@ -68,7 +66,6 @@
     "operation:POST /ops/v1/positions/{position_id}/transfer",
     "operation:POST /ops/v1/session",
     "operation:PUT /api/v1/candidates/{candidate_id}/decision",
-    "operation:PUT /api/v1/drills/{drill_id}/assignment",
     "operation:PUT /api/v1/drills/{drill_id}/inputs",
     "operation:PUT /api/v1/positions/{position_id}/assessment",
     "operation:PUT /api/v1/product-documents/{document_id}/draft",
