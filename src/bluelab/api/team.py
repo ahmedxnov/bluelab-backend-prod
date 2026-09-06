@@ -34,13 +34,17 @@ from uuid import UUID
 from fastapi import APIRouter, Query, status
 
 from bluelab.api.deps import ManagerPrincipal, scope_of
-from bluelab.modules.training import service
+from bluelab.modules.training import assignment, service
 from bluelab.modules.training.schemas import (
+    AssignmentPut,
+    AssignmentView,
     CatalogStatus,
+    CohortsView,
     Month,
     RepDeepDive,
     TeamCatalog,
     TeamDashboard,
+    TeamDrillStats,
     TeamRoster,
 )
 from bluelab.platform.db.session import scoped_transaction
@@ -151,6 +155,70 @@ async def get_team_drill_catalog(
             status=status_filter,
             cursor=cursor,
             limit=limit,
+        )
+
+
+@router.get(
+    "/team/drills/{drill_id}/stats",
+    operation_id="getTeamDrillStats",
+    response_model=TeamDrillStats,
+    status_code=status.HTTP_200_OK,
+    summary="Published drill rollup and best-score leaderboard",
+)
+async def get_team_drill_stats(drill_id: UUID, record: ManagerPrincipal) -> TeamDrillStats:
+    """Return V-7's rollup and V-8's per-rep bests (FR-TRM-009)."""
+    async with scoped_transaction(scope_of(record)) as db:
+        return await service.team_drill_stats(
+            db, team_id=UUID(record.team_id), drill_id=drill_id
+        )
+
+
+@router.get(
+    "/team/cohorts",
+    operation_id="getTeamCohorts",
+    response_model=CohortsView,
+    status_code=status.HTTP_200_OK,
+    summary="Deterministic assignment quick-pick cohorts",
+)
+async def get_team_cohorts(
+    record: ManagerPrincipal, month: MonthQuery = None
+) -> CohortsView:
+    """Return active-rep quick picks scoped to the manager's team (FR-TRM-014)."""
+    async with scoped_transaction(scope_of(record)) as db:
+        return await service.team_cohorts(
+            db,
+            account_id=UUID(record.account_id),
+            team_id=UUID(record.team_id),
+            month=month,
+        )
+
+
+@router.put(
+    "/drills/{drill_id}/assignment",
+    operation_id="putAssignment",
+    response_model=AssignmentView,
+    status_code=status.HTTP_200_OK,
+    summary="Assign or fully re-assign a published team drill",
+)
+async def put_drill_assignment(
+    drill_id: UUID, payload: AssignmentPut, record: ManagerPrincipal
+) -> AssignmentView:
+    """Persist the one assignment for this drill (FR-TRM-011/012/013).
+
+    The payload is a whole replacement, not a patch. This makes a retained
+    recipient's fresh allowance explicit, and `assignment.drill_id`'s unique key
+    makes competing manager sessions last-write-wins rather than duplicate rows.
+    """
+    async with scoped_transaction(scope_of(record)) as db:
+        return await assignment.put_assignment(
+            db,
+            manager_account_id=UUID(record.account_id),
+            org_id=UUID(record.org_id),
+            team_id=UUID(record.team_id),
+            drill_id=drill_id,
+            recipient_account_ids=payload.recipient_account_ids,
+            due_date=payload.due_date,
+            attempts_allowed=payload.attempts_allowed,
         )
 
 

@@ -70,9 +70,12 @@ from bluelab.modules.training.schemas import (
     CatalogStatus,
     CoachFeedbackItemView,
     CoachFeedbackPage,
+    CohortsView,
     CursorPage,
     Direction,
     DrillHistory,
+    DrillLeaderboardRow,
+    DrillRollup,
     DrillStats,
     GapRow,
     LibraryAssignment,
@@ -92,6 +95,7 @@ from bluelab.modules.training.schemas import (
     SourceFilter,
     TeamCatalog,
     TeamDashboard,
+    TeamDrillStats,
     TeamRoster,
     WeeklyPoint,
 )
@@ -1772,4 +1776,181 @@ async def team_catalog(
             ),
             has_more=has_more,
         ),
+    )
+
+
+# ── GET /team/drills/{drill_id}/stats ─────────────────────────────────────────
+
+_TEAM_DRILL_ROLLUP = text(
+    """
+    select d.id as drill_id,
+           s.average_score,
+           case when s.average_score is null then null
+                else fn_score_band(s.average_score) end as band,
+           coalesce(s.reps_practiced, 0) as reps_practiced,
+           coalesce(s.eligible_reps, 0) as eligible_reps,
+           coalesce(s.total_attempts, 0) as total_attempts
+    from drill d
+    left join v_drill_stats s on s.drill_id = d.id
+    where d.id = :drill
+      and d.team_id = :team
+      and d.status = 'published'
+      and not d.self_authored
+    """
+)
+"""V-7's rollup, scoped to a published drill the manager owns.
+
+The explicit team and non-self-authored predicates are defence in depth over the
+RLS policy. Their absence would turn an otherwise ordinary identifier probe into
+a cross-team disclosure if that policy were ever widened for another surface.
+"""
+
+_TEAM_DRILL_LEADERBOARD = text(
+    """
+    with latest as (
+        select distinct on (a.rep_account_id)
+               a.rep_account_id,
+               a.id as latest_attempt_id,
+               a.started_at as last_attempt_at
+        from attempt a
+        join scorecard sc on sc.attempt_id = a.id
+        where a.drill_id = :drill
+          and a.team_id = :team
+          and a.status = 'graded'
+          and a.rep_account_id is not null
+          and not a.self_authored
+        order by a.rep_account_id, a.started_at desc, a.id desc
+    )
+    select a.id as account_id,
+           a.display_name,
+           st.best,
+           fn_score_band(st.best) as band,
+           latest.last_attempt_at,
+           latest.latest_attempt_id
+    from v_participant_drill_stats st
+    join latest on latest.rep_account_id = st.rep_account_id
+    join account a on a.id = st.rep_account_id
+    where st.drill_id = :drill
+      and st.team_id = :team
+      and st.rep_account_id is not null
+    order by st.best desc, latest.last_attempt_at desc, a.id asc
+    """
+)
+"""V-8 supplies each rep's best; the graded-attempt relation supplies replay.
+
+`distinct on` selects the same latest attempt as V-8's descending window, while
+the UUID tie-break makes simultaneous timestamps deterministic. Best-score ties
+then sort by most recent attempt and account id, so the response has one stable
+order without inventing a rank field absent from the contract.
+"""
+
+
+async def team_drill_stats(
+    session: AsyncSession, *, team_id: UUID, drill_id: UUID
+) -> TeamDrillStats:
+    """Read the published drill rollup and manager leaderboard.
+
+    Raises:
+        ProblemError: `404 not-found` for absent, non-published, self-authored,
+            or cross-team drills. These cases intentionally answer identically.
+    """
+    bind = {"team": team_id, "drill": drill_id}
+    rollup = (await session.execute(_TEAM_DRILL_ROLLUP, bind)).one_or_none()
+    if rollup is None:
+        raise not_found()
+
+    rows = (await session.execute(_TEAM_DRILL_LEADERBOARD, bind)).all()
+    return TeamDrillStats(
+        drill_id=rollup.drill_id,
+        rollup=DrillRollup(
+            team_average=_score_band(rollup.average_score, rollup.band),
+            reps_practiced=int(rollup.reps_practiced),
+            eligible_reps=int(rollup.eligible_reps),
+            total_attempts=int(rollup.total_attempts),
+        ),
+        leaderboard=[
+            DrillLeaderboardRow(
+                account_id=row.account_id,
+                display_name=row.display_name,
+                # The inner V-8 row exists only for graded attempts, whose
+                # scorecard score is non-null; the cast records that SQL
+                # invariant for the response model.
+                best=cast(ScoreBand, _score_band(row.best, row.band)),
+                last_attempt_at=row.last_attempt_at,
+                latest_attempt_id=row.latest_attempt_id,
+            )
+            for row in rows
+        ],
+    )
+
+
+# ── GET /team/cohorts ─────────────────────────────────────────────────────────
+
+_COHORT_BOTTOM_HALF = text(
+    """
+    select t.rep_account_id
+    from v_rep_month_tier t
+    join account a on a.id = t.rep_account_id
+    where t.team_id = :team and t.month = :month
+      and a.team_id = :team and a.role = 'rep' and a.status = 'active'
+      and t.rated_reps >= :minimum
+      and t.rank_desc > ceil(t.rated_reps / 2.0)
+    order by t.rating asc, t.rep_account_id asc
+    """
+)
+
+_COHORT_BELOW_SIX = text(
+    """
+    select r.rep_account_id
+    from v_rep_monthly_rating r
+    join account a on a.id = r.rep_account_id
+    where r.team_id = :team and r.month = :month and r.rating < 6.0
+      and a.team_id = :team and a.role = 'rep' and a.status = 'active'
+    order by r.rating asc, r.rep_account_id asc
+    """
+)
+
+_COHORT_LOW_ATTEMPTS = text(
+    """
+    select a.id as account_id
+    from account a
+    left join v_rep_monthly_rating r
+      on r.rep_account_id = a.id and r.team_id = :team and r.month = :month
+    where a.team_id = :team and a.role = 'rep' and a.status = 'active'
+      and coalesce(r.counted_attempts, 0) < :attempt_limit
+    order by coalesce(r.counted_attempts, 0) asc, a.id asc
+    """
+)
+
+_COHORT_NEWEST_JOINERS = text(
+    """
+    select a.id as account_id
+    from account a
+    where a.team_id = :team and a.role = 'rep' and a.status = 'active'
+    order by a.created_at desc, a.id asc
+    limit :limit
+    """
+)
+
+
+async def team_cohorts(
+    session: AsyncSession, *, account_id: UUID, team_id: UUID, month: str | None
+) -> CohortsView:
+    """Return the four deterministic, active-team recipient quick picks."""
+    anchor = await resolve_anchor(session, account_id=account_id, month=month)
+    bind = {"team": team_id, "month": anchor.month}
+    bottom_half = await session.execute(
+        _COHORT_BOTTOM_HALF, {**bind, "minimum": TIERING_MINIMUM}
+    )
+    below_six = await session.execute(_COHORT_BELOW_SIX, bind)
+    low_attempts = await session.execute(
+        _COHORT_LOW_ATTEMPTS, {**bind, "attempt_limit": 5}
+    )
+    newest = await session.execute(_COHORT_NEWEST_JOINERS, {"team": team_id, "limit": 5})
+    return CohortsView(
+        month=anchor.month.strftime("%Y-%m"),
+        bottom_half=[row.rep_account_id for row in bottom_half.all()],
+        rating_below_6=[row.rep_account_id for row in below_six.all()],
+        fewer_than_5_attempts=[row.account_id for row in low_attempts.all()],
+        newest_joiners=[row.account_id for row in newest.all()],
     )

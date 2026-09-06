@@ -440,7 +440,73 @@ class TeamCatalog(BaseModel):
     repeats rows or skips them."""
 
 
+# ── GET /team/drills/{drill_id}/stats · GET /team/cohorts ────────────────────
+
+
+class DrillRollup(BaseModel):
+    """The published drill's V-7 aggregate (FR-SCR-016)."""
+
+    team_average: ScoreBand | None = None
+    reps_practiced: Annotated[int, Field(ge=0)]
+    eligible_reps: Annotated[int, Field(ge=0)]
+    total_attempts: Annotated[int, Field(ge=0)]
+
+
+class DrillLeaderboardRow(BaseModel):
+    """One participant's V-8 best with the most-recent replay entry point."""
+
+    account_id: UUID
+    display_name: str
+    best: ScoreBand
+    last_attempt_at: datetime
+    latest_attempt_id: UUID
+
+
+class TeamDrillStats(BaseModel):
+    """Rollup and best-score leaderboard for one published team drill."""
+
+    drill_id: UUID
+    rollup: DrillRollup
+    leaderboard: list[DrillLeaderboardRow]
+
+
+class CohortsView(BaseModel):
+    """Deterministically ordered, active-rep assignment quick picks (FR-TRM-014)."""
+
+    month: Month
+    bottom_half: list[UUID]
+    rating_below_6: list[UUID]
+    fewer_than_5_attempts: list[UUID]
+    newest_joiners: list[UUID]
+
+
 # ── GET /team/reps/{account_id} ───────────────────────────────────────────────
+
+
+class AssignmentPut(BaseModel):
+    """The complete desired assignment state (FR-TRM-011/012/013)."""
+
+    recipient_account_ids: Annotated[list[UUID], Field(min_length=1)]
+    due_date: date
+    attempts_allowed: Annotated[int, Field(ge=1)]
+
+
+class AssignmentRecipientView(BaseModel):
+    """One fresh recipient allowance returned after an assignment write."""
+
+    account_id: UUID
+    attempts_used: Annotated[int, Field(ge=0)]
+    granted_at: datetime
+
+
+class AssignmentView(BaseModel):
+    """The persisted, single-assignment state for a drill."""
+
+    drill_id: UUID
+    due_date: date
+    attempts_allowed: Annotated[int, Field(ge=1)]
+    recipients: list[AssignmentRecipientView]
+    updated_at: datetime
 
 
 class CallTypeProfile(BaseModel):

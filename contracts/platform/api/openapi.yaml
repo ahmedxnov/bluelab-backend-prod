@@ -1292,7 +1292,9 @@ paths:
       summary: Assignment quick-pick cohorts
       description: >
         Computed recipient cohorts (FR-TRM-014): bottom half by rating, rating below 6.0, fewer
-        than 5 counted attempts this month, newest joiners.
+        than 5 counted attempts this month, newest joiners. All contain active reps from the
+        manager's team only. Bottom half reuses V-4 ranking and is empty below five rated reps;
+        newest joiners contains at most five accounts.
       operationId: getTeamCohorts
       parameters:
         - $ref: "#/components/parameters/MonthParam"
@@ -3714,15 +3716,19 @@ components:
         month: { $ref: "#/components/schemas/Month" }
         bottom_half:
           type: array
+          description: Rated V-4 bottom half, ascending rating then account id; empty below five rated reps.
           items: { type: string, format: uuid }
         rating_below_6:
           type: array
+          description: Current-month ratings strictly below 6.0, ascending rating then account id.
           items: { type: string, format: uuid }
         fewer_than_5_attempts:
           type: array
+          description: Current-month counted attempts below five, including zero, ascending count then account id.
           items: { type: string, format: uuid }
         newest_joiners:
           type: array
+          description: Up to five active team reps, newest account creation first and account id ascending on ties.
           items: { type: string, format: uuid }
 
     AssignmentPut:
