@@ -82,7 +82,7 @@ async def privacy_notice(training_engine) -> AsyncIterator[None]:
         await session.execute(
             text(
                 "insert into legal_document_version (id, kind, version, effective_at)"
-                " values (:id, 'privacy_notice', '2026.1', now())"
+                " values (:id, 'recording_consent_notice', '2026.1', now())"
             ),
             {"id": new_id()},
         )
@@ -91,7 +91,7 @@ async def privacy_notice(training_engine) -> AsyncIterator[None]:
 
     async with maker() as session, session.begin():
         await session.execute(
-            text("delete from legal_document_version where kind = 'privacy_notice'")
+            text("delete from legal_document_version where kind = 'recording_consent_notice'")
         )
 
 

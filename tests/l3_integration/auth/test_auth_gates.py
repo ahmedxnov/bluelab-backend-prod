@@ -24,6 +24,7 @@ session id must change (ASVS 3.2.1). Asserted by replaying the OLD cookie.
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 from tests.l3_integration.auth.conftest import PASSWORD
 
@@ -34,6 +35,12 @@ pytestmark = [
 ]
 
 SESSION_COOKIE = "__Host-bluelab_session"
+@pytest_asyncio.fixture(autouse=True)
+async def required_documents(legal_version):
+    for kind in ("recording_consent_notice", "terms_of_use", "privacy_notice"):
+        await legal_version(kind, "test-required", effective_offset=-60)
+
+
 NEW_PASSWORD = "a-genuinely-new-passphrase"  # pragma: allowlist secret
 FIRST_SIGN_IN = "/api/v1/auth/first-sign-in"
 ACCEPTANCES = "/api/v1/auth/acceptances"
@@ -63,7 +70,7 @@ async def counts(engine, account) -> tuple[int, int]:
 
 @pytest.mark.verifies("FR-IDA-004")
 async def test_completing_first_sign_in_clears_the_gate(client, world, credentials, legal_version):
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
 
@@ -82,7 +89,7 @@ async def test_it_records_both_instruments_at_their_current_versions(
 ):
     """Two rows in two tables — the separation CMP-002/CMP-005 require, asserted
     against the versions actually published rather than whatever was submitted."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
 
@@ -98,7 +105,7 @@ async def test_the_new_password_is_what_signs_in_afterwards(
     client, world, credentials, legal_version
 ):
     """The credential really changed — not just `credential_state`."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
     await client.post(
@@ -126,7 +133,7 @@ async def test_the_session_id_rotates_on_completion(client, world, credentials, 
     shoulder-surfed cookie, a proxy log from the provisioning email) must not
     still open the now fully-privileged session.
     """
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     signed_in = await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
     before = cookie_of(signed_in)
 
@@ -161,7 +168,7 @@ async def test_a_declined_instrument_is_422_and_records_nothing(
     first and validated afterwards — leaving an evidence trail saying someone
     consented when they had explicitly declined. So the tables are counted.
     """
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
 
@@ -175,7 +182,7 @@ async def test_a_declined_instrument_is_422_and_records_nothing(
 async def test_a_password_below_policy_is_refused_and_records_nothing(
     client, world, credentials, legal_version, auth_engine
 ):
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
 
     response = await client.post(
@@ -201,7 +208,7 @@ async def test_replaying_after_success_is_refused_as_not_pending(
     not pending. §6's "replay is a no-op success" governs the consent rows — which
     ARE safe to write twice — not the credential flip.
     """
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
     body = {"new_password": NEW_PASSWORD, "consent": True, "terms_accepted": True}
     assert (await client.post(FIRST_SIGN_IN, json=body)).status_code == 200
@@ -221,7 +228,7 @@ async def test_an_account_that_never_had_the_gate_is_refused(
     This endpoint is a gate exit, not a change-password route — routing it to one
     would be a self-service password change with no re-authentication.
     """
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.manager_email))
 
     response = await client.post(
@@ -242,28 +249,6 @@ async def test_first_sign_in_without_a_session_is_refused(client):
     assert response.json()["type"].endswith("/session-invalid")
 
 
-@pytest.mark.verifies("FR-IDA-004")
-async def test_it_completes_in_an_environment_with_no_published_documents(
-    client, world, credentials, auth_engine
-):
-    """No notice, no terms — a fresh environment, and the gate must still open.
-
-    `first_sign_in` is keyed on `credential_state`, not on any document, so an
-    account cannot be behind a version that does not exist. There is simply
-    nothing to record: the definer helpers reject unpublished versions, so the
-    caller must skip the instrument rather than invent one.
-    """
-    await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
-
-    response = await client.post(
-        FIRST_SIGN_IN, json={"new_password": NEW_PASSWORD, "consent": True, "terms_accepted": True}
-    )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["pending_gates"] == []
-    assert await counts(auth_engine, world.initial) == (0, 0)
-
-
 # ── acceptances: the re-consent path (CMP-002 / CMP-005) ─────────────────────
 
 
@@ -271,13 +256,13 @@ async def test_it_completes_in_an_environment_with_no_published_documents(
 async def test_recording_consent_clears_the_consent_gate(
     client, world, credentials, legal_version, auth_engine
 ):
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
     response = await client.post(ACCEPTANCES, json={"consent": True})
 
     assert response.status_code == 200, response.text
-    assert response.json()["pending_gates"] == []
+    assert response.json()["pending_gates"] == ["terms"]
     assert (await counts(auth_engine, world.rep))[0] == 1
 
 
@@ -292,7 +277,7 @@ async def test_supplying_only_one_instrument_leaves_the_other_pending(
     cleared to None here would report `pending_gates: [terms]` in the body while
     admitting the holder to everything.
     """
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
     await guarded.http.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
@@ -310,7 +295,7 @@ async def test_supplying_only_one_instrument_leaves_the_other_pending(
 async def test_supplying_both_clears_both(
     client, world, credentials, legal_version, auth_engine
 ):
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
@@ -328,7 +313,7 @@ async def test_replaying_acceptances_is_a_no_op_success(
     """Unlike first sign-in, this one really is idempotent: the guard is the
     unique `(person, version)` row, and writing it twice changes nothing
     (00-contract-overview §6)."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
     first = await client.post(ACCEPTANCES, json={"consent": True})
@@ -345,42 +330,13 @@ async def test_declining_through_acceptances_is_refused_and_records_nothing(
     """`false` is not a way to clear a gate. Ignoring it would answer 200 to a
     client that had explicitly declined, and leave it wondering why it is still
     gated."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
     response = await client.post(ACCEPTANCES, json={"consent": False})
 
     assert response.status_code == 422
     assert await counts(auth_engine, world.rep) == (0, 0)
-
-
-@pytest.mark.verifies("CMP-005")
-async def test_terms_published_without_a_notice_does_not_strand_the_account(
-    world, credentials, legal_version, guarded
-):
-    """The gate a user could never close, and the reason it existed.
-
-    `terms_acceptance` carries a Privacy Notice version too, `NOT NULL`, so terms
-    cannot be accepted while no notice is published. But the gate was keyed on the
-    terms version ALONE — so publishing terms first opened a gate that
-    `POST /auth/acceptances` answered `200` to while recording nothing. The account
-    completed first sign-in, was refused every guarded route, and was told
-    everything had worked. Forever.
-
-    A gate must be closeable by the endpoint that exists to close it. Here that
-    means not opening at all until both documents exist — the same rule the
-    consent branch already followed.
-    """
-    await legal_version("terms_of_use", "2026.1")
-    await guarded.http.post("/api/v1/auth/session", json=credentials(world.initial_email))
-
-    completed = await guarded.http.post(
-        FIRST_SIGN_IN, json={"new_password": NEW_PASSWORD, "consent": True, "terms_accepted": True}
-    )
-
-    assert completed.status_code == 200, completed.text
-    assert completed.json()["pending_gates"] == [], "stranded behind an uncloseable gate"
-    assert (await guarded.http.get(guarded.PROBE)).status_code == 200
 
 
 @pytest.mark.verifies("SEC-004")
@@ -397,7 +353,7 @@ async def test_gate_attempts_are_throttled_before_the_hash(
     """
     from bluelab.platform.security import passwords
 
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await throttled.post("/api/v1/auth/session", json=credentials(world.initial_email))
     body = {"new_password": NEW_PASSWORD, "consent": True, "terms_accepted": True}
 

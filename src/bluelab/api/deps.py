@@ -26,14 +26,18 @@ perfectly well. Defaulting to refusal means a forgotten route fails closed:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Request
 from valkey.asyncio import Valkey
 
+from bluelab.modules.identity import service
+from bluelab.modules.identity.gates import pending_gates
 from bluelab.platform.config import Settings, get_settings
 from bluelab.platform.db.scope import Role, ScopeContext
+from bluelab.platform.db.session import scoped_transaction
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError, not_found
 from bluelab.platform.security.cookies import SESSION_COOKIE
@@ -137,7 +141,27 @@ async def current_session(
     record = await store.resolve(raw)
     if record is None:
         raise ProblemError(catalog.SESSION_INVALID)
-    return record
+    if record.gate is not None and record.gate not in GATE_PROBLEMS:
+        raise ProblemError(catalog.SESSION_INVALID)
+    # Only the self-account read uses the stored scope. Product queries receive
+    # current membership; no stale team or gate can authorize a request.
+    async with scoped_transaction(scope_of(record)) as db:
+        try:
+            account, _org = await service.load_principal(db, UUID(record.account_id))
+        except ProblemError:
+            await store.revoke(raw)
+            raise
+        if account.role != record.role or str(account.org_id) != record.org_id:
+            # Privilege changes require a new identifier through sign-in.
+            await store.revoke(raw)
+            raise ProblemError(catalog.SESSION_INVALID)
+        gates = await pending_gates(db, account)
+        if record.gate is not None and record.gate not in gates:
+            # Another device cleared this stored gate. Its privilege change must
+            # not upgrade an older limited cookie in place (security/04 §3).
+            await store.revoke(raw)
+            raise ProblemError(catalog.SESSION_INVALID)
+        return replace(record, team_id=str(account.team_id), gate=gates[0] if gates else None)
 
 
 GatedPrincipal = Annotated[SessionRecord, Depends(current_session)]

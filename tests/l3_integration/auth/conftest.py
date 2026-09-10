@@ -39,6 +39,7 @@ from fastapi import APIRouter
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from tests.legal_fixtures import isolated_legal_catalog
 from tests.support import required_url
 
 from bluelab.api.deps import CurrentPrincipal
@@ -124,8 +125,14 @@ call — and re-deriving the same constant per test would spend most of this
 suite's runtime proving argon2 is slow."""
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def clean_legal_catalog(auth_engine):
+    async with isolated_legal_catalog(auth_engine):
+        yield
+
+
 @pytest_asyncio.fixture
-async def world(auth_engine) -> World:
+async def world(auth_engine, clean_legal_catalog) -> World:
     """Four accounts covering every branch sign-in can take.
 
     Seeded as the migration role: the world has to exist before any principal can
@@ -229,6 +236,11 @@ PROBE_PATH = "/api/v1/_probe"
 _probe_router = APIRouter()
 
 
+@_probe_router.get(PROBE_PATH + "/scope")
+async def _scope_probe(record: CurrentPrincipal) -> dict[str, str]:
+    return {"team_id": record.team_id, "role": record.role}
+
+
 @_probe_router.get(PROBE_PATH)
 async def _probe(record: CurrentPrincipal) -> dict[str, str]:
     """A stand-in for every product endpoint, which will all take `CurrentPrincipal`.
@@ -254,6 +266,7 @@ class Guarded:
     cannot produce — an unrecognised gate, in particular."""
 
     PROBE = PROBE_PATH
+    SCOPE = PROBE_PATH + "/scope"
 
 
 @pytest_asyncio.fixture

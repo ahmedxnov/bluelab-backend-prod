@@ -156,40 +156,38 @@ documents will mislead the next reader.
 
 ## Deferred, with a named home
 
-### OI-18 · A gate opened mid-session is not enforced until the next sign-in
-**Status:** owner-ruled, no trigger exists yet → lands with the legal-document
-write path · **Raised:** the auth review pass
+### OI-18 · Current legal gates and account scope
+**Status:** resolved by the authorized identity gate patch, 2026-09-11.
 
-`pending_gates` is derived on read, but what *enforces* a gate is
-`SessionRecord.gate`, and that is written at sign-in. So publishing a new privacy
-notice or terms version limits an account **from its next sign-in**, not from its
-next request. `GET /auth/session` reports the gate honestly; nothing stops a
-client that ignores the answer.
+Request resolution now reloads active account state, team membership and legal
+gates from PostgreSQL before product access. This closes the existing-session
+bypass even when a legal version is inserted directly by a migration. The earlier
+publish-time fan-out proposal remains an optimization only; a future replacement
+must preserve next-request enforcement, including scheduled effective versions.
 
-**Owner ruling: re-gate live sessions at publish time**, rather than re-deriving
-on every authenticated request. Publishing a legal document happens a few times a
-year and authenticated requests happen constantly, so the work belongs on the rare
-event. The rejected alternative costs 2–3 extra queries on every call, forever, to
-close a window that opens almost never.
+Missing effective documents cannot clear onboarding or record partial evidence.
+Recording consent uses `recording_consent_notice`; terms acceptance requires the
+exact `terms_of_use`/`privacy_notice` pair. Future versions are ignored until
+effective, and equal effective timestamps have an immutable-id tie-break.
 
-**Not implemented, because there is nothing to hook.** `legal_document_version` is
-`P0_REFERENCE` and the contract exposes exactly one Legal operation —
-`GET /api/v1/legal-documents`. Publishing today is a migration or an ops
-statement, so there is no application code path where a re-gate could run. The
-mechanism lands *with* the write path when one is built; `SessionStore` already
-has the account index that a fan-out would walk.
+Deactivated/missing accounts and changed roles invalidate the current cookie.
+Team changes are reflected before product queries. A stored limited cookie whose
+gate was cleared on another device requires reauthentication rather than silently
+gaining privileges. The accepting device retains the existing rotation path.
 
-Until then the enforcement boundary is sign-in, and `gates.py`'s module docstring
-says so rather than implying the stronger guarantee it used to claim.
+Regression evidence: `tests/l3_integration/auth/test_current_identity_gates.py`.
+Apply the regenerated helpers through `tools/check_rls_drift.py --apply` during
+the normal database bootstrap/release step before running the patched application.
 
 ### OI-6 · `revoke_all` has a race
 **Status:** deferred → identity module · **Raised:** SEC-F7
 
 A session created between the `SMEMBERS` read and the `DELETE` survives
-deactivation. Closing it properly needs a per-account revocation epoch checked on
-every `resolve()`. Today's real guard is identity's sign-in check rejecting a
-deactivated account, so this lands *with* identity rather than before it
-(FR-IDA-010).
+deactivation. Closing the store race itself needs a per-account revocation epoch
+checked on every `resolve()`. Request resolution now checks current account status
+and rejects/revokes surviving cookies while the account is deactivated (OI-18).
+The coordination-store race remains open, including deactivation/reactivation
+without an intervening request; do not count OI-18 as full SEC-001 completion.
 
 ### OI-7 · Password policy is unenforced
 **Status:** deferred → identity module · **Raised:** SEC-F8

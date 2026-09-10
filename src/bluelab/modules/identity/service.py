@@ -43,7 +43,12 @@ from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bluelab.modules.identity.gates import KIND_NOTICE, KIND_TERMS, current_versions
+from bluelab.modules.identity.gates import (
+    KIND_NOTICE,
+    KIND_PRIVACY,
+    KIND_TERMS,
+    current_versions,
+)
 from bluelab.modules.identity.models import CREDENTIAL_INITIAL, Account, Org
 from bluelab.modules.identity.schemas import Gate, OrgView, SessionView
 from bluelab.platform.config import Settings
@@ -278,25 +283,26 @@ async def _record_instruments(
     unpublished version anyway, so a request-sourced value would surface as a 500
     rather than as quiet corruption.
 
-    A kind with no published version is SKIPPED, not an error. A fresh
-    environment has no notice and no terms, and an account cannot consent to a
-    document that does not exist; treating that as a failure would make the
-    first-sign-in gate uncompletable on a new deployment.
-
-    `terms_acceptance` carries both versions because the acceptance covers both
-    documents (CMP-005), so it needs the notice version too — and is skipped
-    unless both are published.
+    Validate every requested instrument before writing anything. A missing
+    effective document leaves the corresponding gate pending (CMP-002/CMP-005).
+    Consent names its own notice; terms acceptance names the terms/privacy pair.
     """
-    versions = await current_versions(session, KIND_NOTICE, KIND_TERMS)
+    versions = await current_versions(session, KIND_NOTICE, KIND_TERMS, KIND_PRIVACY)
     notice = versions.get(KIND_NOTICE)
     terms_version = versions.get(KIND_TERMS)
+    privacy = versions.get(KIND_PRIVACY)
+
+    if consent and notice is None:
+        raise ProblemError(catalog.CONSENT_REQUIRED)
+    if terms and (terms_version is None or privacy is None):
+        raise ProblemError(catalog.TERMS_ACCEPTANCE_REQUIRED)
 
     if consent and notice is not None:
         await session.execute(_RECORD_CONSENT, {"id": new_id(), "version": notice})
 
-    if terms and terms_version is not None and notice is not None:
+    if terms:
         await session.execute(
-            _RECORD_TERMS, {"id": new_id(), "terms": terms_version, "privacy": notice}
+            _RECORD_TERMS, {"id": new_id(), "terms": terms_version, "privacy": privacy}
         )
 
 

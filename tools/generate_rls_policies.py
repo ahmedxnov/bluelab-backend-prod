@@ -367,7 +367,7 @@ create or replace function app_account_has_accepted(
     -- nothing else: no timestamps, no row, no other account. `p_account_id` is
     -- supplied by the caller from its own session record, never from a request.
     select case p_kind
-        when 'privacy_notice' then exists (
+        when 'recording_consent_notice' then exists (
             select 1 from public.consent_record c
             where c.account_id = p_account_id and c.notice_version = p_version
         )
@@ -379,6 +379,20 @@ create or replace function app_account_has_accepted(
         -- user. Fail closed: a typo in a kind must not open a compliance gate.
         else false
     end
+$$;
+
+create or replace function app_account_has_accepted_terms(
+    p_account_id uuid, p_terms_version text, p_privacy_version text
+) returns boolean language sql stable security definer set search_path = '' as $$
+    -- CMP-005: both versions must occur in the SAME acceptance row.
+    -- Expose only the current account's boolean, never its evidence rows.
+    select p_account_id = nullif(pg_catalog.current_setting('app.account_id', true), '')::uuid
+        and exists (
+            select 1 from public.terms_acceptance t
+            where t.account_id = p_account_id
+              and t.terms_version = p_terms_version
+              and t.privacy_version = p_privacy_version
+        )
 $$;
 
 create or replace function app_record_consent(p_id uuid, p_notice_version text)
@@ -424,9 +438,10 @@ returns void language plpgsql volatile security definer set search_path = '' as 
         -- hold junk, not because the junk was dangerous.
         if not exists (
             select 1 from public.legal_document_version v
-            where v.kind = 'privacy_notice' and v.version = p_notice_version
+            where v.kind = 'recording_consent_notice' and v.version = p_notice_version
+              and v.effective_at <= pg_catalog.now()
         ) then
-            raise exception 'app_record_consent: no published privacy_notice version %',
+            raise exception 'app_record_consent: no published recording_consent_notice version %',
                 p_notice_version using errcode = 'raise_exception';
         end if;
 
@@ -456,12 +471,8 @@ create or replace function app_record_terms_acceptance(
     -- a document the person never read, entered into the evidence trail as though
     -- they had. The caller passes what it displayed.
     --
-    -- Note the asymmetry this leaves: the unique key spans the pair, but
-    -- `app_account_has_accepted('terms_of_use', v)` matches on `terms_version`
-    -- alone. A row with the right terms and a stale privacy version therefore
-    -- satisfies the terms gate. Correct as far as the gate goes — the terms were
-    -- accepted — and the privacy notice has its own gate through
-    -- `privacy_notice`, so nothing is unguarded.
+    -- The gate matches this exact pair through app_account_has_accepted_terms;
+    -- recording consent never substitutes for privacy-notice acceptance.
     -- Raises on a scope naming no account, as `app_record_consent` does and for
     -- the same reason.
     declare
@@ -483,6 +494,7 @@ create or replace function app_record_terms_acceptance(
         if not exists (
             select 1 from public.legal_document_version v
             where v.kind = 'terms_of_use' and v.version = p_terms_version
+              and v.effective_at <= pg_catalog.now()
         ) then
             raise exception 'app_record_terms_acceptance: no published terms_of_use version %',
                 p_terms_version using errcode = 'raise_exception';
@@ -490,6 +502,7 @@ create or replace function app_record_terms_acceptance(
         if not exists (
             select 1 from public.legal_document_version v
             where v.kind = 'privacy_notice' and v.version = p_privacy_version
+              and v.effective_at <= pg_catalog.now()
         ) then
             raise exception 'app_record_terms_acceptance: no published privacy_notice version %',
                 p_privacy_version using errcode = 'raise_exception';
@@ -561,6 +574,7 @@ $$;
 revoke execute on function
     app_account_for_sign_in(text),
     app_account_has_accepted(uuid, text, text),
+    app_account_has_accepted_terms(uuid, text, text),
     app_record_consent(uuid, text),
     app_record_terms_acceptance(uuid, text, text),
     app_set_initial_credential(text),

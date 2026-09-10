@@ -55,7 +55,7 @@ async def published(migration_engine):
     """
     maker = async_sessionmaker(migration_engine, expire_on_commit=False)
     async with maker() as s, s.begin():
-        for kind, version in (("privacy_notice", NOTICE), ("terms_of_use", TERMS)):
+        for kind, version in (("recording_consent_notice", NOTICE), ("privacy_notice", NOTICE), ("terms_of_use", TERMS)):
             await s.execute(
                 text(
                     "insert into legal_document_version (id, kind, version, effective_at)"
@@ -273,7 +273,7 @@ async def test_an_unpublished_version_is_refused(as_principal, manager, world, p
     What it stops is the evidence trail holding acceptances of documents that do
     not exist."""
     async with as_principal(manager(world.m1, world.org_a)) as db:
-        with pytest.raises(DBAPIError, match="no published privacy_notice"):
+        with pytest.raises(DBAPIError, match="no published recording_consent_notice"):
             await db.execute(
                 text("select app_record_consent(:id, :version)"),
                 {"id": new_id(), "version": "never-published-9.9"},

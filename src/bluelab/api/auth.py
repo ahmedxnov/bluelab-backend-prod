@@ -197,8 +197,8 @@ async def get_session(record: GatedPrincipal) -> SessionView:
     """
     async with scoped_transaction(scope_of(record)) as db:
         account, org = await service.load_principal(db, UUID(record.account_id))
-        gates = (record.gate,) if record.gate else await pending_gates(db, account)
-        return service.view(account, org, gates)  # type: ignore[arg-type]
+        gates = await pending_gates(db, account)
+        return service.view(account, org, gates)
 
 
 async def _rotate(store: SessionStore, raw: str, *, gate: Gate | None) -> str:

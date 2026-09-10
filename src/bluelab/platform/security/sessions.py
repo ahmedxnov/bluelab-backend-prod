@@ -68,9 +68,8 @@ class SessionRecord:
     gate: str | None = None
     """The pending gate, if any: `first_sign_in`, `consent`, or `terms`.
 
-    A gate-limited session is a real session that answers `409` on everything
-    except the gate endpoints (api/00 §3). Carrying the gate here means the
-    limitation cannot be bypassed by hitting a route that forgot to check.
+    A compatibility snapshot, not an authorization decision. Request resolution
+    reloads current account membership and legal gates before any product route.
     """
 
 

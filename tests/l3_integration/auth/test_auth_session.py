@@ -13,14 +13,23 @@ safe one.
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from tests.l3_integration.auth.conftest import app_settings
+from tests.legal_fixtures import seed_admitted_accounts
 
 pytestmark = [
     pytest.mark.l3_integration,
     pytest.mark.l7_security,
     pytest.mark.invariant_path,
 ]
+
+@pytest_asyncio.fixture(autouse=True)
+async def admitted_baseline(auth_engine, world):
+    async with async_sessionmaker(auth_engine)() as db, db.begin():
+        await seed_admitted_accounts(db, world.org)
+
 
 SESSION_COOKIE = "__Host-bluelab_session"
 
@@ -199,7 +208,7 @@ async def test_publishing_a_notice_version_opens_the_consent_gate(
     every affected account rewritten at publish time, and the first one missed
     keeps access it should have been re-asked for.
     """
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
@@ -211,7 +220,7 @@ async def test_publishing_a_notice_version_opens_the_consent_gate(
 async def test_recording_consent_clears_the_gate(
     client, world, credentials, legal_version, record_consent
 ):
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await record_consent(world.rep, "2026.1")
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
@@ -229,9 +238,9 @@ async def test_consent_to_an_older_version_does_not_satisfy_a_new_one(
     change to the notice would ship with everyone silently still consented to the
     old text, which is the failure the requirement exists to prevent.
     """
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await record_consent(world.rep, "2026.1")
-    await legal_version("privacy_notice", "2026.2", effective_offset=1)
+    await legal_version("recording_consent_notice", "2026.2", effective_offset=0)
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
@@ -244,7 +253,7 @@ async def test_terms_are_a_separate_instrument_from_consent(
 ):
     """Consent and terms are distinct instruments (CMP-002 vs CMP-005), and one
     does not imply the other. Both pending is both listed, in precedence order."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
 
     both = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
@@ -261,7 +270,7 @@ async def test_one_accounts_consent_does_not_satisfy_another(
 ):
     """The helper runs with BYPASSRLS, so its `account_id` filter is the only thing
     keeping one person's acceptance from answering for everyone."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await record_consent(world.manager, "2026.1")
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
@@ -278,7 +287,7 @@ async def test_first_sign_in_subsumes_the_other_gates(
     """Precedence, asserted rather than assumed. `SessionRecord.gate` is scalar, so
     an account behind first-sign-in must report exactly that even when a notice is
     also outstanding — completing it records both instruments anyway."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
@@ -591,7 +600,7 @@ async def test_a_consent_gate_refuses_a_guarded_route_too(
     """The gate that opens on an *established* session, not just at first sign-in.
     Publishing a notice must close the product surface to everyone who has not
     accepted it, on their next request."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await guarded.http.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
     response = await guarded.http.get(guarded.PROBE)
