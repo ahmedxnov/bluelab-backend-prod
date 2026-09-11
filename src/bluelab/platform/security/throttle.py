@@ -123,3 +123,49 @@ class Throttle:
         during an ordinary Monday morning.
         """
         await self._client.delete(self._key(bucket, subject))
+
+    async def backoff_remaining(self, bucket: str, subject: str) -> int | None:
+        """Return the active exponential-backoff hold, if one exists."""
+        remaining_ms = int(await self._client.pttl(self._key(f"{bucket}:hold", subject)))
+        if remaining_ms <= 0:
+            return None
+        return max(1, (remaining_ms + 999) // 1000)
+
+    async def record_failure(
+        self,
+        bucket: str,
+        subject: str,
+        *,
+        threshold: int,
+        window_seconds: int,
+        base_seconds: int,
+        max_seconds: int,
+    ) -> int | None:
+        """Count one failed proof and start a bounded exponential hold.
+
+        The failure counter has a fixed, non-sliding window. Requests made while
+        a hold is active never call this method, so hostile traffic cannot extend
+        a hold merely by continuing to send requests. Once the window expires the
+        history disappears automatically: this is backoff, never account lockout.
+        """
+        failure_key = self._key(f"{bucket}:failures", subject)
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.incr(failure_key)
+            pipe.expire(failure_key, window_seconds, nx=True)
+            counted, _ = await pipe.execute()
+
+        failures = int(counted)
+        if failures < threshold:
+            return None
+
+        exponent = failures - threshold
+        delay = min(max_seconds, base_seconds * (2**exponent))
+        await self._client.set(self._key(f"{bucket}:hold", subject), "1", ex=delay)
+        return int(delay)
+
+    async def clear_failures(self, bucket: str, subject: str) -> None:
+        """Clear both failure history and any active backoff hold."""
+        await self._client.delete(
+            self._key(f"{bucket}:failures", subject),
+            self._key(f"{bucket}:hold", subject),
+        )

@@ -48,7 +48,7 @@ def system_scope(*, org_id: UUID, team_id: UUID | None = None) -> ScopeContext:
     )
 
 
-def ops_scope() -> ScopeContext:
+def ops_scope(*, ops_account_id: UUID) -> ScopeContext:
     """BlueLab internal operations.
 
     **No customer scope tuple at all** — the widest privilege in the system, and
@@ -59,4 +59,7 @@ def ops_scope() -> ScopeContext:
 
     Every use is audited by the caller into `ops_audit` with a mandatory reason.
     """
-    return ScopeContext(principal_kind=PrincipalKind.OPS)
+    return ScopeContext(
+        principal_kind=PrincipalKind.OPS,
+        ops_account_id=ops_account_id,
+    )

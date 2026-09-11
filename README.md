@@ -130,6 +130,21 @@ becomes available: `postgres` remains the container bootstrap superuser,
 non-superuser `bluelab_app` identity from `.env.example`. Set the two database
 URLs from that template before running Alembic or the application.
 
+To exercise the Phase 2 application and email-worker containers, copy
+`.env.example` to `.env`, set the local MinIO credentials declared in Compose,
+and generate independent Base64-encoded 32-byte values for
+`EMAIL_DELIVERY_LOCAL_KEY` and `OPS_TOTP_LOCAL_KEY`. Then run:
+
+```bash
+docker compose --profile runtime up -d --build --wait
+```
+
+The runtime profile applies the single migration lineage first, creates the
+local object bucket, then starts the non-root API and worker from the same image.
+Both application containers use read-only root filesystems and a 30-second
+SIGTERM grace period; the worker health check follows Procrastinate's database
+heartbeat.
+
 Bring-up from a clean clone must complete in **under 10 minutes**, and that figure
 is a timed commit-gate stage, not an aspiration (infra/00 §4).
 

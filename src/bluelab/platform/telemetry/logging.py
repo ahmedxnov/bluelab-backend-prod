@@ -36,6 +36,7 @@ SENSITIVE_KEYS: Final = frozenset(
         "reset_token",
         "session_id",
         "authorization",
+        "presigned_url",
         "cookie",
         "set_cookie",
         "x_agent_signature",

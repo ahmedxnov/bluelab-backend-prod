@@ -33,16 +33,34 @@ from uuid import UUID
 from fastapi import Depends, Request
 from valkey.asyncio import Valkey
 
+from bluelab.adapters.secrets import (
+    KmsSealer,
+    KmsUnsealer,
+    LocalAeadCipher,
+    SecretSealer,
+    SecretUnsealer,
+    kms_circuit,
+    kms_client,
+    kms_policy,
+)
 from bluelab.modules.identity import service
 from bluelab.modules.identity.gates import pending_gates
+from bluelab.modules.operations import service as operations_service
 from bluelab.platform.config import Settings, get_settings
+from bluelab.platform.db.privileged import ops_scope
 from bluelab.platform.db.scope import Role, ScopeContext
 from bluelab.platform.db.session import scoped_transaction
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError, not_found
-from bluelab.platform.security.cookies import SESSION_COOKIE
-from bluelab.platform.security.sessions import SessionRecord, SessionStore
+from bluelab.platform.security.cookies import OPS_SESSION_COOKIE, SESSION_COOKIE
+from bluelab.platform.security.sessions import (
+    OpsSessionRecord,
+    OpsSessionStore,
+    SessionRecord,
+    SessionStore,
+)
 from bluelab.platform.security.throttle import Throttle
+from bluelab.platform.security.totp import TotpReplayStore
 
 GATE_PROBLEMS = {
     "first_sign_in": catalog.FIRST_SIGN_IN_REQUIRED,
@@ -74,13 +92,100 @@ def get_session_store(
     )
 
 
+def get_ops_session_store(
+    valkey: Annotated[Valkey, Depends(get_valkey)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> OpsSessionStore:
+    return OpsSessionStore(
+        valkey,
+        idle_seconds=settings.session_idle_seconds,
+        absolute_seconds=settings.session_absolute_seconds,
+    )
+
+
 def get_throttle(valkey: Annotated[Valkey, Depends(get_valkey)]) -> Throttle:
     return Throttle(valkey)
 
 
 ValkeyDep = Annotated[Valkey, Depends(get_valkey)]
 SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
+OpsSessionStoreDep = Annotated[OpsSessionStore, Depends(get_ops_session_store)]
 ThrottleDep = Annotated[Throttle, Depends(get_throttle)]
+
+
+def get_delivery_secret_sealer(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> SecretSealer:
+    """Return the API plane's encrypt-only E-1 capability."""
+    configured: SecretSealer | None = getattr(
+        request.app.state, "delivery_secret_sealer", None
+    )
+    if configured is not None:
+        return configured
+
+    if settings.email_delivery_local_key is not None:
+        configured = LocalAeadCipher.from_base64(
+            settings.email_delivery_local_key.get_secret_value()
+        )
+    elif settings.email_delivery_kms_key_id is not None:
+        configured = KmsSealer(
+            kms_client(settings),
+            key_id=settings.email_delivery_kms_key_id,
+            policy=kms_policy(settings),
+            circuit=kms_circuit(settings),
+        )
+    else:
+        raise RuntimeError(
+            "EMAIL_DELIVERY_LOCAL_KEY or EMAIL_DELIVERY_KMS_KEY_ID is required "
+            "before E-1 material can be issued"
+        )
+
+    request.app.state.delivery_secret_sealer = configured
+    return configured
+
+
+DeliverySecretSealerDep = Annotated[SecretSealer, Depends(get_delivery_secret_sealer)]
+
+
+def get_ops_totp_unsealer(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> SecretUnsealer:
+    """Return the operations sign-in path's decrypt-only TOTP capability."""
+    configured: SecretUnsealer | None = getattr(
+        request.app.state, "ops_totp_unsealer", None
+    )
+    if configured is not None:
+        return configured
+    if settings.ops_totp_local_key is not None:
+        configured = LocalAeadCipher.from_base64(
+            settings.ops_totp_local_key.get_secret_value()
+        )
+    elif settings.ops_totp_kms_key_id is not None:
+        configured = KmsUnsealer(
+            kms_client(settings),
+            policy=kms_policy(settings),
+            circuit=kms_circuit(settings),
+        )
+    else:
+        raise RuntimeError(
+            "OPS_TOTP_LOCAL_KEY or OPS_TOTP_KMS_KEY_ID is required for operations sign-in"
+        )
+    request.app.state.ops_totp_unsealer = configured
+    return configured
+
+
+OpsTotpUnsealerDep = Annotated[SecretUnsealer, Depends(get_ops_totp_unsealer)]
+
+
+def get_totp_replay_store(
+    valkey: Annotated[Valkey, Depends(get_valkey)],
+) -> TotpReplayStore:
+    return TotpReplayStore(valkey)
+
+
+TotpReplayStoreDep = Annotated[TotpReplayStore, Depends(get_totp_replay_store)]
 
 
 def client_address(request: Request) -> str:
@@ -114,6 +219,15 @@ signature a statement of what it needs and lets a test override the address
 through `dependency_overrides` rather than by forging a transport."""
 
 
+async def enforce_ops_rate(
+    throttle: ThrottleDep,
+    settings: Annotated[Settings, Depends(get_settings)],
+    source: ClientAddress,
+) -> None:
+    """Apply the five-per-minute source limit to every operations request."""
+    await operations_service.guard_ops_request(throttle, settings, source=source)
+
+
 def session_cookie(request: Request) -> str:
     """The raw session id from the cookie.
 
@@ -127,6 +241,39 @@ def session_cookie(request: Request) -> str:
     if not raw:
         raise ProblemError(catalog.SESSION_INVALID)
     return raw
+
+
+def ops_session_cookie(request: Request) -> str:
+    """Return only the operations cookie, never the customer cookie."""
+    raw = request.cookies.get(OPS_SESSION_COOKIE)
+    if not raw:
+        raise ProblemError(catalog.OPS_SESSION_INVALID)
+    return raw
+
+
+async def current_ops_session(
+    raw: Annotated[str, Depends(ops_session_cookie)],
+    store: OpsSessionStoreDep,
+) -> OpsSessionRecord:
+    """Resolve an ops session and authoritatively re-check active status."""
+    record = await store.resolve(raw)
+    if record is None:
+        raise ProblemError(catalog.OPS_SESSION_INVALID)
+    try:
+        ops_account_id = UUID(record.ops_account_id)
+    except ValueError:
+        await store.revoke(raw)
+        raise ProblemError(catalog.OPS_SESSION_INVALID) from None
+    async with scoped_transaction(ops_scope(ops_account_id=ops_account_id)) as db:
+        try:
+            await operations_service.load_ops_account(db, ops_account_id)
+        except ProblemError:
+            await store.revoke(raw)
+            raise
+    return record
+
+
+OpsPrincipal = Annotated[OpsSessionRecord, Depends(current_ops_session)]
 
 
 async def current_session(

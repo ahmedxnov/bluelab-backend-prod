@@ -80,6 +80,26 @@ class AcceptancesRequest(_Request):
     terms_accepted: bool | None = None
 
 
+class PasswordResetRequest(_Request):
+    email: EmailStr
+
+
+class PasswordResetComplete(_NewPassword):
+    token: Annotated[str, Field(min_length=1, max_length=1024)]
+
+
+class LegalDocumentView(BaseModel):
+    version: str
+    effective_at: datetime
+    url: Annotated[str, Field(min_length=1)]
+
+
+class LegalDocuments(BaseModel):
+    recording_consent_notice: LegalDocumentView
+    terms_of_use: LegalDocumentView
+    privacy_notice: LegalDocumentView
+
+
 class OrgView(BaseModel):
     id: UUID
     name: str

@@ -73,6 +73,15 @@ grading_turnaround_ms = _meter.create_histogram(
 email_delivery = _meter.create_counter(
     "email.delivery", description="sent | delivered | bounced | delayed, by template kind"
 )
+dependency_result = _meter.create_counter(
+    "dependency.result",
+    description="Bounded external capability call outcome by dependency",
+)
+dependency_duration = _meter.create_histogram(
+    "dependency.duration",
+    unit="ms",
+    description="Bounded external capability call duration by dependency",
+)
 
 # ── operations ────────────────────────────────────────────────────────────────
 ops_break_glass = _meter.create_counter(
@@ -94,6 +103,7 @@ class JobOutcome(StrEnum):
 
     SUCCESS = "success"
     RETRY = "retry"
+    FAILED = "failed"
     OPS_FAULT = "ops_fault"
 
 
@@ -157,6 +167,13 @@ def record_email_delivery(*, kind: str, state: str) -> None:
     alert rule — this counter is what it ages against (gate FS-10).
     """
     email_delivery.add(1, _labels(email_kind=kind, state=state))
+
+
+def record_dependency(*, dependency: str, outcome: str, duration_ms: float) -> None:
+    """One logical provider call; labels are closed adapter-level identities."""
+    labels = _labels(dependency=dependency, outcome=outcome)
+    dependency_result.add(1, labels)
+    dependency_duration.record(duration_ms, labels)
 
 
 def record_break_glass(*, verb: str) -> None:

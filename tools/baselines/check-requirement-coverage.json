@@ -1,6 +1,6 @@
 {
   "note": "Requirements with no live test yet (quality/08 \u00a75, ADR-0062). This list may only shrink.",
-  "count": 124,
+  "count": 119,
   "gaps": [
     "CMP-003",
     "FR-CND-001",
@@ -40,10 +40,7 @@
     "FR-HIR-016",
     "FR-HIR-017",
     "FR-HIR-018",
-    "FR-IDA-001",
     "FR-IDA-002",
-    "FR-IDA-003",
-    "FR-IDA-006",
     "FR-IDA-007",
     "FR-IDA-008",
     "FR-IDA-011",
@@ -92,9 +89,7 @@
     "NFR-005",
     "NFR-006",
     "NFR-007",
-    "SEC-001",
     "SEC-003",
-    "SEC-006",
     "SEC-007",
     "SEC-008",
     "SEC-009",

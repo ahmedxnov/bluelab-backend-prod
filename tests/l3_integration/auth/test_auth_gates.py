@@ -125,7 +125,7 @@ async def test_the_new_password_is_what_signs_in_afterwards(
     assert new.json()["pending_gates"] == []
 
 
-@pytest.mark.verifies("SEC-002")
+@pytest.mark.verifies("SEC-001")
 async def test_the_session_id_rotates_on_completion(client, world, credentials, legal_version):
     """ASVS 3.2.1 — setting the real password is an authentication-level change.
 
@@ -145,6 +145,26 @@ async def test_the_session_id_rotates_on_completion(client, world, credentials, 
     assert before != after, "the session id did not change"
     replayed = await client.get("/api/v1/auth/session", cookies={SESSION_COOKIE: before})
     assert replayed.status_code == 401, "the pre-completion cookie still resolves"
+
+
+@pytest.mark.verifies("SEC-001", "CMP-002")
+async def test_acceptance_gate_clearance_rotates_the_session(
+    client, world, credentials, legal_version
+):
+    await legal_version("recording_consent_notice", "2026.1")
+    signed_in = await client.post(
+        "/api/v1/auth/session", json=credentials(world.rep_email)
+    )
+    before = cookie_of(signed_in)
+
+    accepted = await client.post(ACCEPTANCES, json={"consent": True})
+    after = cookie_of(accepted)
+
+    assert before != after, "the gate-limited session id did not change"
+    replayed = await client.get(
+        "/api/v1/auth/session", cookies={SESSION_COOKIE: before}
+    )
+    assert replayed.status_code == 401, "the pre-acceptance cookie still resolves"
 
 
 # ── first sign-in: what it must refuse, and refuse WITHOUT writing ───────────

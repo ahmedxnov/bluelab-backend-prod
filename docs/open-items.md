@@ -180,14 +180,19 @@ Apply the regenerated helpers through `tools/check_rls_drift.py --apply` during
 the normal database bootstrap/release step before running the patched application.
 
 ### OI-6 · `revoke_all` has a race
-**Status:** deferred → identity module · **Raised:** SEC-F7
+**Status:** closed 2026-09-11 · **Raised:** SEC-F7
 
-A session created between the `SMEMBERS` read and the `DELETE` survives
-deactivation. Closing the store race itself needs a per-account revocation epoch
-checked on every `resolve()`. Request resolution now checks current account status
-and rejects/revokes surviving cookies while the account is deactivated (OI-18).
-The coordination-store race remains open, including deactivation/reactivation
-without an intervening request; do not count OI-18 as full SEC-001 completion.
+Customer and operations sessions carry a per-account revocation generation.
+`revoke_all()` increments it before reading the session index; creation rejects a
+generation captured before revocation, and resolution checks it before and after
+sliding the idle window. Per-session tombstones prevent a stale concurrent
+resolver from restoring a signed-out or rotated cookie. Sign-in snapshots the
+generation before its current-account re-check, so a concurrent credential or
+scope revocation cannot issue a session against the newer generation.
+
+Regression evidence: `tests/l1_unit/test_session_revocation_race.py` and the
+session revocation journeys under `tests/l3_integration/auth/` and
+`tests/l3_integration/operations/`.
 
 ### OI-7 · Password policy is unenforced
 **Status:** deferred → identity module · **Raised:** SEC-F8
@@ -197,12 +202,13 @@ ASVS L1 wants ≥ 12 characters plus a breached-password check. `FR-IDA` owns th
 policy; the constants living unused in platform currently *imply* it is handled.
 
 ### OI-8 · No timeout on Valkey calls
-**Status:** deferred → needs a value · **Raised:** platform security pass
+**Status:** closed 2026-09-11 · **Raised:** platform security pass
 
-Postgres has `statement_timeout`; the coordination store has nothing (universal
-rule: timeouts on all I/O). Needs a config field, and the *value* matters because
-the single-live-call lease sits on the admission path where the participant is
-waiting.
+The coordination client applies the shared `DEPENDENCY_TIMEOUT_SECONDS` bound to
+both connection establishment and socket operations. The validated default is
+five seconds and deployment configuration may select a value from greater than
+zero through thirty seconds. Regression evidence:
+`tests/l1_unit/test_rate_limit_health.py`.
 
 ### OI-19 · `GET /me/library` re-counts the whole grid on every page
 **Status:** deferred → needs L6 · **Raised:** `/me/library` security review
@@ -252,28 +258,27 @@ Needs the L6 load suite (zero files today) with a realistically-sized org.
 ## Verify before first real use
 
 ### OI-9 · The Procrastinate table shape is unpinned
-**Status:** verify · **Source:** banked DoD item, [quality/08 §4](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/quality/08-definition-of-done-and-the-build-loop.quality.md), data **F-9**
+**Status:** closed 2026-09-11 · **Source:** banked DoD item, [quality/08 §4](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/quality/08-definition-of-done-and-the-build-loop.quality.md), data **F-9**
 
-`platform/queue/enqueue.py` writes `procrastinate_jobs` directly, because
-`defer()` manages its own connection and would break the single commit ADR-0023
-chose the queue for. The column names are **assumed**. The banked item's own
-framing holds: the transactional-enqueue *property* is the commitment and gets an
-L3 test; the *syntax* is schematic and gets a version pin.
+The hash-locked runtime pins Procrastinate 3.9.0. Transactional enqueue targets
+that version's installed table shape and commits with the domain write in the
+same PostgreSQL transaction. L3 rollback/commit tests exercise the property, and
+the containerized worker reaches a healthy database-backed heartbeat.
 
 ### OI-10 · Two library assumptions
-**Status:** verify
+**Status:** closed 2026-09-11
 
-- `valkey.asyncio` import path and pipeline semantics (buffered commands are
-  assumed synchronous until `execute()`).
-- `meter.create_gauge` needs `opentelemetry-api` ≥ 1.23. Nothing in
-  `pyproject.toml` is version-pinned yet.
+- The hash-locked runtime pins Valkey 6.1.1; session, throttle, replay, and
+  pipeline behavior runs against both fakeredis and a real Valkey 8 process.
+- The hash-locked runtime pins OpenTelemetry API/SDK 1.44.0 and instrumentation
+  0.65b0; telemetry imports and the content-free telemetry gate execute in CI.
 
 ### OI-11 · Nothing in `platform/` has been executed
-**Status:** verify
+**Status:** closed 2026-09-11
 
-No tests, no import check, no byte-compile — deliberately, per instruction. The
-cross-module wirings (`errors/handlers` → `telemetry/correlation`,
-`queue/context` → three others) are verified by reading only.
+The backend suite imports and executes the platform wiring. Ruff, mypy,
+import-linter, telemetry, cookie, tier-branch, fixture-safety, contract-lock,
+conformance, and requirement gates cover its static boundaries.
 
 ---
 

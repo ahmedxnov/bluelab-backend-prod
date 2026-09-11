@@ -395,7 +395,7 @@ async def test_signing_out_of_an_expired_session_still_succeeds(client):
     assert response.status_code == 204
 
 
-@pytest.mark.verifies("SEC-002")
+@pytest.mark.verifies("SEC-001")
 async def test_a_session_past_its_absolute_window_is_refused(
     guarded, world, credentials, monkeypatch
 ):
@@ -422,7 +422,32 @@ async def test_a_session_past_its_absolute_window_is_refused(
     assert (await guarded.http.get(guarded.PROBE)).status_code == 401
 
 
-@pytest.mark.verifies("SEC-002")
+@pytest.mark.verifies("SEC-001")
+async def test_idle_expiry_is_checked_even_if_the_store_key_still_exists(
+    guarded, world, monkeypatch
+):
+    """The record clock is authoritative even when a store TTL is late."""
+    from bluelab.platform import clock
+    from bluelab.platform.security import sessions
+
+    opened = clock.now()
+    raw = await guarded.store.create(
+        account_id=world.manager,
+        org_id=world.org,
+        team_id=world.manager,
+        role="manager",
+        opened_at=opened,
+    )
+    monkeypatch.setattr(
+        sessions,
+        "now",
+        lambda: opened + timedelta(seconds=app_settings().session_idle_seconds + 1),
+    )
+
+    assert await guarded.store.resolve(raw) is None
+
+
+@pytest.mark.verifies("SEC-001")
 async def test_a_resolved_session_never_outlives_the_nearer_clock(guarded, world, credentials):
     """The stored key's TTL is the idle window, not the absolute one.
 
@@ -573,6 +598,20 @@ async def test_a_successful_sign_in_clears_the_counters(throttled, world, creden
     # Would be the third failure, and refused, had the success not reset it.
     for _ in range(2):
         assert (await throttled.post("/api/v1/auth/session", json=wrong)).status_code == 401
+
+
+@pytest.mark.verifies("SEC-004")
+async def test_password_reset_request_uses_the_prescribed_identifier_limit(client):
+    payload = {"email": "unknown-reset-subject@example.com"}
+
+    for _ in range(3):
+        assert (
+            await client.post("/api/v1/auth/password-reset-request", json=payload)
+        ).status_code == 202
+
+    refused = await client.post("/api/v1/auth/password-reset-request", json=payload)
+    assert refused.status_code == 429
+    assert int(refused.headers["retry-after"]) > 0
 
 
 # ── the gate REFUSAL, which is what makes the gate a gate ─────────────────────

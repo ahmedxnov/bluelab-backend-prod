@@ -34,10 +34,11 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from fastapi import FastAPI
 from valkey.asyncio import Valkey
 
-from bluelab.api import health, v1
+from bluelab.api import health, ops_v1, v1
 from bluelab.platform.config import Environment, Settings, get_settings
 from bluelab.platform.db.engine import dispose_engine
 from bluelab.platform.errors import handlers
+from bluelab.platform.http.csrf import OriginCheckMiddleware
 from bluelab.platform.http.rate_limit import RateLimitMiddleware
 from bluelab.platform.http.security_headers import SecurityHeadersMiddleware
 
@@ -48,7 +49,10 @@ def _lifespan(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.valkey = Valkey.from_url(
-            settings.valkey_url.get_secret_value(), decode_responses=True
+            settings.valkey_url.get_secret_value(),
+            decode_responses=True,
+            socket_connect_timeout=settings.dependency_timeout_seconds,
+            socket_timeout=settings.dependency_timeout_seconds,
         )
         try:
             yield
@@ -114,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit=resolved.request_limit_per_window,
         window_seconds=resolved.request_limit_window_seconds,
     )
+    app.add_middleware(OriginCheckMiddleware, fail_closed=resolved.is_production)
     app.add_middleware(SecurityHeadersMiddleware, enable_hsts=resolved.cookie_secure)
 
     # Registered before the routers. Ordering does not change what catches, but it
@@ -123,6 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(v1.router)
+    app.include_router(ops_v1.router)
     return app
 
 

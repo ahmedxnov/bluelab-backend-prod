@@ -38,29 +38,52 @@ rather than with the caller's good intentions.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bluelab.adapters.secrets import DeliverySecretContext, SecretSealer
 from bluelab.modules.identity.gates import (
     KIND_NOTICE,
     KIND_PRIVACY,
     KIND_TERMS,
     current_versions,
 )
-from bluelab.modules.identity.models import CREDENTIAL_INITIAL, Account, Org
-from bluelab.modules.identity.schemas import Gate, OrgView, SessionView
+from bluelab.modules.identity.models import (
+    CREDENTIAL_INITIAL,
+    Account,
+    LegalDocumentVersion,
+    Org,
+)
+from bluelab.modules.identity.schemas import (
+    Gate,
+    LegalDocuments,
+    LegalDocumentView,
+    OrgView,
+    SessionView,
+)
+from bluelab.platform.clock import now
 from bluelab.platform.config import Settings
 from bluelab.platform.db.scope import Role
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError
 from bluelab.platform.ids import new_id
+from bluelab.platform.queue.catalog import Lane
+from bluelab.platform.queue.enqueue import enqueue
 from bluelab.platform.security import passwords
 from bluelab.platform.security.throttle import Limit, Throttle
+from bluelab.platform.security.tokens import hash_token, mint_reset_token, mint_token
+from bluelab.platform.telemetry import metrics
+from bluelab.platform.telemetry.logging import get_logger
 
 STATUS_ACTIVE = "active"
+
+LEGAL_KINDS = (KIND_NOTICE, KIND_TERMS, KIND_PRIVACY)
+
+_auth_log = get_logger("bluelab.auth")
 
 
 _SIGN_IN_LOOKUP = text(
@@ -79,9 +102,10 @@ the lookup possible. See its comment in `tools/generate_rls_policies.py`.
 class Authenticated:
     """A verified principal, before a session exists for it.
 
-    Carries ids only. The display name, org name and timezone the response needs
-    are read *after* the session exists, through the account's own scope — see
-    `load_principal`. Nothing here is rendered to the client.
+    The credential hash is carried only long enough to ensure a concurrent reset
+    did not replace the credential between verification and session issue. The
+    display name, org name and timezone are read through the account's own scope.
+    Nothing here is rendered to the client.
     """
 
     account_id: UUID
@@ -89,6 +113,7 @@ class Authenticated:
     team_id: UUID
     role: str
     gate: Gate | None
+    password_hash: str
 
 
 IDENTIFIER_BUCKET = "identifier"
@@ -123,16 +148,57 @@ async def guard_sign_in(throttle: Throttle, settings: Settings, *, email: str, s
     what was *submitted*, so an unknown address throttles exactly like a known one
     and `429` discloses nothing `401` did not (FR-IDA-005).
     """
-    window = settings.auth_throttle_window_seconds
-    identifier = Limit(settings.auth_throttle_identifier_attempts, window)
-    per_source = Limit(settings.auth_throttle_source_attempts, window)
-
-    retry_identifier = await throttle.hit(IDENTIFIER_BUCKET, email.strip().lower(), identifier)
-    retry_source = await throttle.hit(SOURCE_BUCKET, source, per_source)
-
+    normalized = email.strip().lower()
+    retry_source = await throttle.hit(
+        SOURCE_BUCKET,
+        source,
+        Limit(
+            settings.auth_throttle_source_attempts,
+            settings.auth_throttle_source_window_seconds,
+        ),
+    )
+    retry_identifier = await throttle.backoff_remaining(IDENTIFIER_BUCKET, normalized)
     retry = retry_identifier if retry_identifier is not None else retry_source
     if retry is not None:
+        _record_auth_signal(
+            metrics.AuthSignal.THROTTLE_TRIPPED,
+            identifier=normalized,
+            source=source,
+        )
         raise ProblemError(catalog.RATE_LIMITED, headers={"Retry-After": str(retry)})
+
+
+async def record_sign_in_failure(
+    throttle: Throttle, settings: Settings, *, email: str, source: str
+) -> None:
+    """Record one invalid proof and apply bounded exponential backoff."""
+    normalized = email.strip().lower()
+    await throttle.record_failure(
+        IDENTIFIER_BUCKET,
+        normalized,
+        threshold=settings.auth_throttle_identifier_attempts,
+        window_seconds=settings.auth_throttle_window_seconds,
+        base_seconds=settings.auth_backoff_base_seconds,
+        max_seconds=settings.auth_backoff_max_seconds,
+    )
+    _record_auth_signal(
+        metrics.AuthSignal.SIGN_IN_FAILED,
+        identifier=normalized,
+        source=source,
+    )
+
+
+def _record_auth_signal(
+    signal: metrics.AuthSignal, *, identifier: str, source: str
+) -> None:
+    """Emit a content-free, stable-identity security signal."""
+    metrics.record_auth_signal(signal)
+    _auth_log.warning(
+        "auth_signal",
+        signal=signal.value,
+        identifier_id=hash_token(identifier),
+        source_id=hash_token(source),
+    )
 
 
 async def clear_sign_in_throttle(throttle: Throttle, *, email: str, source: str) -> None:
@@ -143,8 +209,56 @@ async def clear_sign_in_throttle(throttle: Throttle, *, email: str, source: str)
     on an ordinary morning, and anyone who fumbles a password once would carry it
     for the rest of the window.
     """
-    await throttle.clear(IDENTIFIER_BUCKET, email.strip().lower())
+    await throttle.clear_failures(IDENTIFIER_BUCKET, email.strip().lower())
     await throttle.clear(SOURCE_BUCKET, source)
+
+
+async def guard_password_reset_request(
+    throttle: Throttle, settings: Settings, *, email: str, source: str
+) -> None:
+    """Apply the non-enumerating 3/email/hour and 10/source/hour limits."""
+    limit_window = settings.password_reset_request_window_seconds
+    retries = (
+        await throttle.hit(
+            "reset_request_identifier",
+            email.strip().lower(),
+            Limit(settings.password_reset_request_identifier_attempts, limit_window),
+        ),
+        await throttle.hit(
+            "reset_request_source",
+            source,
+            Limit(settings.password_reset_request_source_attempts, limit_window),
+        ),
+    )
+    retry = next((value for value in retries if value is not None), None)
+    if retry is not None:
+        _record_auth_signal(
+            metrics.AuthSignal.THROTTLE_TRIPPED,
+            identifier=email.strip().lower(),
+            source=source,
+        )
+        raise ProblemError(catalog.RATE_LIMITED, headers={"Retry-After": str(retry)})
+
+
+async def guard_password_reset_completion(
+    throttle: Throttle, settings: Settings, *, source: str
+) -> None:
+    """Apply the reset-token completion source limit."""
+    retry = await throttle.hit(
+        "reset_complete_source",
+        source,
+        Limit(
+            settings.password_reset_complete_source_attempts,
+            settings.password_reset_complete_window_seconds,
+        ),
+    )
+    if retry is not None:
+        _record_auth_signal(
+            metrics.AuthSignal.THROTTLE_TRIPPED,
+            identifier="password-reset-completion",
+            source=source,
+        )
+        raise ProblemError(catalog.RATE_LIMITED, headers={"Retry-After": str(retry)})
 
 
 async def authenticate(session: AsyncSession, *, email: str, password: str) -> Authenticated:
@@ -195,6 +309,7 @@ async def authenticate(session: AsyncSession, *, email: str, password: str) -> A
         # cannot make; `gates.pending_gates` raises rather than guessing, and
         # runs under the account's own scope once the session exists.
         gate="first_sign_in" if row.credential_state == CREDENTIAL_INITIAL else None,
+        password_hash=row.password_hash,
     )
 
 
@@ -404,7 +519,10 @@ def view(
     )
 
 
-async def load_principal(session: AsyncSession, account_id: UUID) -> tuple[Account, Org]:
+async def load_principal(
+    session: AsyncSession,
+    account_id: UUID,
+) -> tuple[Account, Org]:
     """Re-read the account behind an established session.
 
     The session record deliberately stores no display name, role label, or org
@@ -418,11 +536,12 @@ async def load_principal(session: AsyncSession, account_id: UUID) -> tuple[Accou
             directly (FR-IDA-010); this is the backstop for the window between
             the two, and it does not distinguish the two cases.
     """
-    found = (
-        await session.execute(
-            select(Account, Org).join(Org, Org.id == Account.org_id).where(Account.id == account_id)
-        )
-    ).one_or_none()
+    statement = (
+        select(Account, Org)
+        .join(Org, Org.id == Account.org_id)
+        .where(Account.id == account_id)
+    )
+    found = (await session.execute(statement)).one_or_none()
 
     if found is None or found[0].status != STATUS_ACTIVE:
         raise ProblemError(catalog.SESSION_INVALID)
@@ -438,3 +557,260 @@ def role_of(role: str) -> Role:
     model must not resolve to a scope at all.
     """
     return Role(role)
+
+
+async def legal_documents(session: AsyncSession) -> LegalDocuments:
+    """Return the three newest effective legal documents, or fail closed."""
+    rows = (
+        (
+            await session.execute(
+                select(LegalDocumentVersion)
+                .where(
+                    LegalDocumentVersion.kind.in_(LEGAL_KINDS),
+                    LegalDocumentVersion.effective_at <= func.now(),
+                )
+                .distinct(LegalDocumentVersion.kind)
+                .order_by(
+                    LegalDocumentVersion.kind,
+                    LegalDocumentVersion.effective_at.desc(),
+                    LegalDocumentVersion.id.desc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    current = {
+        row.kind: LegalDocumentView(
+            version=row.version,
+            effective_at=row.effective_at,
+            url=row.url,
+        )
+        for row in rows
+    }
+    if set(current) != set(LEGAL_KINDS):
+        raise ProblemError(
+            catalog.SERVICE_UNAVAILABLE,
+            detail="The current legal-document catalog is unavailable.",
+        )
+    return LegalDocuments(
+        recording_consent_notice=current[KIND_NOTICE],
+        terms_of_use=current[KIND_TERMS],
+        privacy_notice=current[KIND_PRIVACY],
+    )
+
+
+_RESET_ACCOUNT = text(
+    "select account_id, org_id from app_account_for_password_reset(:email)"
+)
+_ISSUE_RESET = text(
+    "select app_issue_password_reset("
+    ":account_id, :org_id, :token_id, :token_hash, :expires_at,"
+    " :email_send_id, :ciphertext)"
+)
+_CONSUME_RESET = text(
+    "select app_consume_password_reset(:token_hash, :password_hash)"
+)
+
+
+async def issue_password_reset(
+    session: AsyncSession,
+    *,
+    email: str,
+    sealer: SecretSealer,
+) -> None:
+    """Create a reset delivery without revealing whether ``email`` exists."""
+    found = (
+        await session.execute(_RESET_ACCOUNT, {"email": email.strip().lower()})
+    ).one_or_none()
+
+    token = mint_reset_token()
+    token_id = new_id()
+    email_send_id = new_id()
+    # Unknown addresses still pay the same CSPRNG and AEAD work. These synthetic
+    # ids are discarded and cannot become a persistence side channel.
+    account_id = found.account_id if found is not None else new_id()
+    org_id = found.org_id if found is not None else new_id()
+    ciphertext = await sealer.seal(
+        token.plaintext,
+        context=DeliverySecretContext(
+            email_send_id=email_send_id,
+            org_id=org_id,
+            purpose="password_reset_token",
+        ),
+    )
+
+    if found is None:
+        return
+
+    issued = (
+        await session.execute(
+            _ISSUE_RESET,
+            {
+                "account_id": account_id,
+                "org_id": org_id,
+                "token_id": token_id,
+                "token_hash": token.token_hash,
+                "expires_at": token.expires_at,
+                "email_send_id": email_send_id,
+                "ciphertext": ciphertext,
+            },
+        )
+    ).scalar_one()
+    # A deactivation can win after the lookup. That outcome remains the same
+    # unconditional 202 and the transaction persists nothing.
+    if not issued:
+        return
+    await enqueue(
+        session,
+        Lane.DISPATCH_EMAIL,
+        {"email_send_id": str(email_send_id)},
+        org_id=org_id,
+    )
+
+
+async def complete_password_reset(
+    session: AsyncSession,
+    *,
+    token: str,
+    new_password: str,
+) -> UUID:
+    """Consume one reset token and return the account whose sessions must end."""
+    account_id = (
+        await session.execute(
+            _CONSUME_RESET,
+            {
+                "token_hash": hash_token(token),
+                "password_hash": passwords.hash_password(new_password),
+            },
+        )
+    ).scalar_one_or_none()
+    if account_id is None:
+        raise ProblemError(catalog.RESET_TOKEN_INVALID)
+    return UUID(str(account_id))
+
+
+class ProvisionAccountOutcome(StrEnum):
+    """Every expected result of the domain-bound provisioning transaction."""
+
+    CREATED = "created"
+    ORG_NOT_FOUND = "org_not_found"
+    DOMAIN_MISMATCH = "domain_mismatch"
+    MANAGER_NOT_FOUND = "manager_not_found"
+    DUPLICATE_EMAIL = "duplicate_email"
+    INVALID_MANAGER_SHAPE = "invalid_manager_shape"
+    INVALID_ROLE = "invalid_role"
+
+
+async def provision_org(
+    session: AsyncSession,
+    *,
+    name: str,
+    registered_domain: str,
+    timezone: str,
+) -> Org:
+    """Create one customer tenancy shell through the identity service boundary."""
+    org = Org(
+        id=new_id(),
+        name=name,
+        registered_domain=registered_domain,
+        timezone=timezone,
+    )
+    session.add(org)
+    await session.flush()
+    return org
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionAccountResult:
+    outcome: ProvisionAccountOutcome
+    account_id: UUID
+    email_send_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class E1Recipient:
+    """The minimum identity projection the E-1 dispatcher may read."""
+
+    email: str
+    display_name: str
+
+
+_ISSUE_INITIAL_CREDENTIALS = text(
+    "select app_issue_initial_credentials("
+    ":account_id, :org_id, :email, :display_name, :role, :manager_account_id,"
+    " :password_hash, :email_send_id, :ciphertext, :expires_at)"
+)
+
+
+async def provision_account(
+    session: AsyncSession,
+    *,
+    org_id: UUID,
+    email: str,
+    display_name: str,
+    role: str,
+    manager_account_id: UUID | None,
+    sealer: SecretSealer,
+) -> ProvisionAccountResult:
+    """Atomically create a domain-bound account, E-1 ledger row, and job."""
+    account_id = new_id()
+    email_send_id = new_id()
+    initial_credential = mint_token()
+    expires_at = now() + timedelta(hours=24)
+    ciphertext = await sealer.seal(
+        initial_credential,
+        context=DeliverySecretContext(
+            email_send_id=email_send_id,
+            org_id=org_id,
+            purpose="initial_credential",
+        ),
+    )
+    raw_outcome = (
+        await session.execute(
+            _ISSUE_INITIAL_CREDENTIALS,
+            {
+                "account_id": account_id,
+                "org_id": org_id,
+                "email": email.strip().lower(),
+                "display_name": display_name,
+                "role": role,
+                "manager_account_id": manager_account_id,
+                "password_hash": passwords.hash_password(initial_credential),
+                "email_send_id": email_send_id,
+                "ciphertext": ciphertext,
+                "expires_at": expires_at,
+            },
+        )
+    ).scalar_one()
+    outcome = ProvisionAccountOutcome(str(raw_outcome))
+    if outcome is ProvisionAccountOutcome.CREATED:
+        await enqueue(
+            session,
+            Lane.DISPATCH_EMAIL,
+            {"email_send_id": str(email_send_id)},
+            org_id=org_id,
+        )
+    return ProvisionAccountResult(
+        outcome=outcome,
+        account_id=account_id,
+        email_send_id=email_send_id,
+    )
+
+
+async def resolve_e1_recipient(
+    session: AsyncSession, *, account_id: UUID, org_id: UUID
+) -> E1Recipient | None:
+    """Resolve the current active account through identity's service boundary."""
+    row = (
+        await session.execute(
+            select(Account.email, Account.display_name).where(
+                Account.id == account_id,
+                Account.org_id == org_id,
+                Account.status == STATUS_ACTIVE,
+            )
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    return E1Recipient(email=str(row.email), display_name=str(row.display_name))

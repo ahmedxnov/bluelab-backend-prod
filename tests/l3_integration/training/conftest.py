@@ -157,7 +157,10 @@ async def world(training_engine, clean_training_legal_catalog) -> AsyncIterator[
             return now - month_elapsed * (age_rank / 10)
 
         await s.execute(
-            text("insert into org (id, name, timezone) values (:id, 'Training Org', 'UTC')"),
+            text(
+                "insert into org (id, name, registered_domain, timezone)"
+                " values (:id, 'Training Org', 'training.example', 'UTC')"
+            ),
             {"id": ids["org"]},
         )
         # UTC deliberately: these tests assert on month and week boundaries, and a
@@ -630,7 +633,10 @@ async def team_world(training_engine, clean_training_legal_catalog) -> AsyncIter
     maker = async_sessionmaker(training_engine, expire_on_commit=False)
     async with maker() as s, s.begin():
         await s.execute(
-            text("insert into org (id, name, timezone) values (:id, 'Team Org', 'UTC')"),
+            text(
+                "insert into org (id, name, registered_domain, timezone)"
+                " values (:id, 'Team Org', 'team.example', 'UTC')"
+            ),
             {"id": org},
         )
         # UTC for the same reason `world` uses it: these assertions are about

@@ -45,7 +45,17 @@ from bluelab.platform.clock import now
 from bluelab.platform.security.tokens import hash_token, mint_token
 
 _SESSION_PREFIX: Final = "session:"
+_SESSION_REVOCATION_PREFIX: Final = "session:revoked:"
 _ACCOUNT_INDEX_PREFIX: Final = "session:account:"
+_ACCOUNT_REVOCATION_PREFIX: Final = "session:account:revocation:"
+_OPS_SESSION_PREFIX: Final = "ops:session:"
+_OPS_SESSION_REVOCATION_PREFIX: Final = "ops:session:revoked:"
+_OPS_ACCOUNT_INDEX_PREFIX: Final = "ops:session:account:"
+_OPS_ACCOUNT_REVOCATION_PREFIX: Final = "ops:session:account:revocation:"
+
+
+class SessionRevokedDuringCreation(RuntimeError):
+    """The account was revoked after authentication but before session issue."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +74,7 @@ class SessionRecord:
     created_at: str
     last_seen_at: str
     absolute_expires_at: str
+    revocation_epoch: int = 0
 
     gate: str | None = None
     """The pending gate, if any: `first_sign_in`, `consent`, or `terms`.
@@ -112,6 +123,7 @@ class SessionStore:
         role: str,
         gate: str | None = None,
         opened_at: datetime | None = None,
+        revocation_epoch: int | None = None,
     ) -> str:
         """Open a session and return the raw id for the cookie.
 
@@ -119,6 +131,11 @@ class SessionStore:
         """
         raw = mint_token()
         instant = opened_at or now()
+        epoch = (
+            await self.revocation_epoch(account_id)
+            if revocation_epoch is None
+            else revocation_epoch
+        )
         record = SessionRecord(
             account_id=str(account_id),
             org_id=str(org_id),
@@ -127,16 +144,28 @@ class SessionStore:
             created_at=instant.isoformat(),
             last_seen_at=instant.isoformat(),
             absolute_expires_at=(instant + self._absolute).isoformat(),
+            revocation_epoch=epoch,
             gate=gate,
         )
 
         key = _SESSION_PREFIX + hash_token(raw)
+        index = _ACCOUNT_INDEX_PREFIX + str(account_id)
+        epoch_key = _ACCOUNT_REVOCATION_PREFIX + str(account_id)
         async with self._client.pipeline(transaction=True) as pipe:
             pipe.set(key, json.dumps(asdict(record)), ex=self._ttl_seconds(record, instant))
-            pipe.sadd(_ACCOUNT_INDEX_PREFIX + str(account_id), key)
-            pipe.expire(_ACCOUNT_INDEX_PREFIX + str(account_id), int(self._absolute.total_seconds()))
+            pipe.sadd(index, key)
+            pipe.expire(index, int(self._absolute.total_seconds()))
+            pipe.expire(epoch_key, int(self._absolute.total_seconds()))
             await pipe.execute()
+        if await self.revocation_epoch(account_id) != epoch:
+            await self._remove_record(key, record)
+            raise SessionRevokedDuringCreation("account sessions were revoked during issue")
         return raw
+
+    async def revocation_epoch(self, account_id: UUID) -> int:
+        """Return the account generation captured by a prospective session."""
+        value = await self._client.get(_ACCOUNT_REVOCATION_PREFIX + str(account_id))
+        return int(value) if value is not None else 0
 
     def new_session_expires_at(self, opened_at: datetime) -> datetime:
         """Return the effective expiry for a session opened at ``opened_at``."""
@@ -154,7 +183,12 @@ class SessionStore:
         Returns None for unknown, expired, or revoked — the caller answers
         `401 session-invalid` for all three without distinguishing them.
         """
-        key = _SESSION_PREFIX + hash_token(raw)
+        token_hash = hash_token(raw)
+        key = _SESSION_PREFIX + token_hash
+        revocation_key = _SESSION_REVOCATION_PREFIX + token_hash
+        if await self._client.exists(revocation_key):
+            await self._client.delete(key)
+            return None
         payload = await self._client.get(key)
         if payload is None:
             return None
@@ -162,12 +196,23 @@ class SessionStore:
         record = _decode(payload)
         instant = now()
 
-        if datetime.fromisoformat(record.absolute_expires_at) <= instant:
-            await self._client.delete(key)
+        if (
+            self.effective_expires_at(record) <= instant
+            or await self.revocation_epoch(UUID(record.account_id))
+            != record.revocation_epoch
+        ):
+            await self._remove_record(key, record)
             return None
 
         slid = replace(record, last_seen_at=instant.isoformat())
         await self._client.set(key, json.dumps(asdict(slid)), ex=self._ttl_seconds(slid, instant))
+        if (
+            await self._client.exists(revocation_key)
+            or await self.revocation_epoch(UUID(record.account_id))
+            != record.revocation_epoch
+        ):
+            await self._remove_record(key, record)
+            return None
         return slid
 
     async def set_gate_and_rotate(self, raw: str, *, gate: str | None) -> str | None:
@@ -200,28 +245,71 @@ class SessionStore:
         Implemented as create-new-then-delete-old so a failure between the two
         leaves the user with a working session rather than locked out.
         """
-        old_key = _SESSION_PREFIX + hash_token(raw)
+        old_token_hash = hash_token(raw)
+        old_key = _SESSION_PREFIX + old_token_hash
+        old_revocation_key = _SESSION_REVOCATION_PREFIX + old_token_hash
         payload = await self._client.get(old_key)
         if payload is None:
             return None
 
-        record = replace(_decode(payload), gate=gate)
+        original = _decode(payload)
+        instant = now()
+        if (
+            self.effective_expires_at(original) <= instant
+            or await self.revocation_epoch(UUID(original.account_id))
+            != original.revocation_epoch
+        ):
+            await self._remove_record(old_key, original)
+            return None
+
+        record = replace(original, gate=gate)
         new_raw = mint_token()
         new_key = _SESSION_PREFIX + hash_token(new_raw)
         index = _ACCOUNT_INDEX_PREFIX + record.account_id
 
         async with self._client.pipeline(transaction=True) as pipe:
-            pipe.set(new_key, json.dumps(asdict(record)), ex=self._ttl_seconds(record, now()))
+            pipe.set(new_key, json.dumps(asdict(record)), ex=self._ttl_seconds(record, instant))
             pipe.sadd(index, new_key)
             pipe.srem(index, old_key)
+            pipe.set(
+                old_revocation_key,
+                "1",
+                ex=int(self._absolute.total_seconds()),
+            )
             pipe.delete(old_key)
             await pipe.execute()
 
+        if await self.revocation_epoch(UUID(record.account_id)) != record.revocation_epoch:
+            await self._remove_record(new_key, record)
+            return None
         return new_raw
 
     async def revoke(self, raw: str) -> None:
         """End one session — sign-out."""
-        await self._client.delete(_SESSION_PREFIX + hash_token(raw))
+        token_hash = hash_token(raw)
+        key = _SESSION_PREFIX + token_hash
+        revocation_key = _SESSION_REVOCATION_PREFIX + token_hash
+        payload = await self._client.get(key)
+        if payload is None:
+            async with self._client.pipeline(transaction=True) as pipe:
+                pipe.set(
+                    revocation_key,
+                    "1",
+                    ex=int(self._absolute.total_seconds()),
+                )
+                pipe.delete(key)
+                await pipe.execute()
+            return
+        record = _decode(payload)
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.set(
+                revocation_key,
+                "1",
+                ex=int(self._absolute.total_seconds()),
+            )
+            pipe.delete(key)
+            pipe.srem(_ACCOUNT_INDEX_PREFIX + record.account_id, key)
+            await pipe.execute()
 
     async def revoke_all(self, account_id: UUID) -> int:
         """End every session an account holds, immediately.
@@ -233,6 +321,11 @@ class SessionStore:
             How many sessions were ended.
         """
         index = _ACCOUNT_INDEX_PREFIX + str(account_id)
+        epoch_key = _ACCOUNT_REVOCATION_PREFIX + str(account_id)
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.incr(epoch_key)
+            pipe.expire(epoch_key, int(self._absolute.total_seconds()))
+            await pipe.execute()
         # `smembers` is typed `Awaitable[set] | set` because valkey-py shares one
         # signature between its sync and async clients. This one is async, so the
         # await is correct and the union is a stub artefact.
@@ -249,3 +342,191 @@ class SessionStore:
         """The nearer of the two clocks, so no key outlives its session."""
         absolute_remaining = datetime.fromisoformat(record.absolute_expires_at) - instant
         return max(1, int(min(self._idle, absolute_remaining).total_seconds()))
+
+    async def _remove_record(self, key: str, record: SessionRecord) -> None:
+        """Delete a session and its account-index membership atomically."""
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.delete(key)
+            pipe.srem(_ACCOUNT_INDEX_PREFIX + record.account_id, key)
+            await pipe.execute()
+
+
+@dataclass(frozen=True, slots=True)
+class OpsSessionRecord:
+    """A separately keyed operations session with no customer scope fields."""
+
+    ops_account_id: str
+    created_at: str
+    last_seen_at: str
+    absolute_expires_at: str
+    revocation_epoch: int = 0
+
+
+def _decode_ops(payload: str | bytes) -> OpsSessionRecord:
+    raw = json.loads(payload)
+    known = set(OpsSessionRecord.__dataclass_fields__)
+    return OpsSessionRecord(**{key: value for key, value in raw.items() if key in known})
+
+
+class OpsSessionStore:
+    """Opaque operations sessions isolated from customer keys and records."""
+
+    def __init__(self, client: Valkey, *, idle_seconds: int, absolute_seconds: int) -> None:
+        self._client = client
+        self._idle = timedelta(seconds=idle_seconds)
+        self._absolute = timedelta(seconds=absolute_seconds)
+
+    async def create(
+        self,
+        *,
+        ops_account_id: UUID,
+        opened_at: datetime | None = None,
+        revocation_epoch: int | None = None,
+    ) -> str:
+        """Open an operations session and return its one-time raw identifier."""
+        raw = mint_token()
+        instant = opened_at or now()
+        epoch = (
+            await self.revocation_epoch(ops_account_id)
+            if revocation_epoch is None
+            else revocation_epoch
+        )
+        record = OpsSessionRecord(
+            ops_account_id=str(ops_account_id),
+            created_at=instant.isoformat(),
+            last_seen_at=instant.isoformat(),
+            absolute_expires_at=(instant + self._absolute).isoformat(),
+            revocation_epoch=epoch,
+        )
+        key = _OPS_SESSION_PREFIX + hash_token(raw)
+        index = _OPS_ACCOUNT_INDEX_PREFIX + str(ops_account_id)
+        epoch_key = _OPS_ACCOUNT_REVOCATION_PREFIX + str(ops_account_id)
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.set(key, json.dumps(asdict(record)), ex=self._ttl_seconds(record, instant))
+            pipe.sadd(index, key)
+            pipe.expire(index, int(self._absolute.total_seconds()))
+            pipe.expire(epoch_key, int(self._absolute.total_seconds()))
+            await pipe.execute()
+        if await self.revocation_epoch(ops_account_id) != epoch:
+            await self._remove_record(key, record)
+            raise SessionRevokedDuringCreation("operator sessions were revoked during issue")
+        return raw
+
+    async def revocation_epoch(self, ops_account_id: UUID) -> int:
+        """Return the operator generation captured by a prospective session."""
+        value = await self._client.get(
+            _OPS_ACCOUNT_REVOCATION_PREFIX + str(ops_account_id)
+        )
+        return int(value) if value is not None else 0
+
+    def new_session_expires_at(self, opened_at: datetime) -> datetime:
+        return min(opened_at + self._idle, opened_at + self._absolute)
+
+    def effective_expires_at(self, record: OpsSessionRecord) -> datetime:
+        idle_expiry = datetime.fromisoformat(record.last_seen_at) + self._idle
+        absolute_expiry = datetime.fromisoformat(record.absolute_expires_at)
+        return min(idle_expiry, absolute_expiry)
+
+    async def resolve(self, raw: str) -> OpsSessionRecord | None:
+        """Resolve and slide a live operations session."""
+        token_hash = hash_token(raw)
+        key = _OPS_SESSION_PREFIX + token_hash
+        revocation_key = _OPS_SESSION_REVOCATION_PREFIX + token_hash
+        if await self._client.exists(revocation_key):
+            await self._client.delete(key)
+            return None
+        payload = await self._client.get(key)
+        if payload is None:
+            return None
+        try:
+            record = _decode_ops(payload)
+            UUID(record.ops_account_id)
+            instant = now()
+            if (
+                self.effective_expires_at(record) <= instant
+                or await self.revocation_epoch(UUID(record.ops_account_id))
+                != record.revocation_epoch
+            ):
+                await self._remove_record(key, record)
+                return None
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+            await self._client.delete(key)
+            return None
+
+        slid = replace(record, last_seen_at=instant.isoformat())
+        await self._client.set(
+            key, json.dumps(asdict(slid)), ex=self._ttl_seconds(slid, instant)
+        )
+        if (
+            await self._client.exists(revocation_key)
+            or await self.revocation_epoch(UUID(record.ops_account_id))
+            != record.revocation_epoch
+        ):
+            await self._remove_record(key, record)
+            return None
+        return slid
+
+    async def revoke(self, raw: str) -> None:
+        """End one operations session."""
+        token_hash = hash_token(raw)
+        key = _OPS_SESSION_PREFIX + token_hash
+        revocation_key = _OPS_SESSION_REVOCATION_PREFIX + token_hash
+        payload = await self._client.get(key)
+        if payload is None:
+            async with self._client.pipeline(transaction=True) as pipe:
+                pipe.set(
+                    revocation_key,
+                    "1",
+                    ex=int(self._absolute.total_seconds()),
+                )
+                pipe.delete(key)
+                await pipe.execute()
+            return
+        try:
+            record = _decode_ops(payload)
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+            async with self._client.pipeline(transaction=True) as pipe:
+                pipe.set(
+                    revocation_key,
+                    "1",
+                    ex=int(self._absolute.total_seconds()),
+                )
+                pipe.delete(key)
+                await pipe.execute()
+            return
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.set(
+                revocation_key,
+                "1",
+                ex=int(self._absolute.total_seconds()),
+            )
+            pipe.delete(key)
+            pipe.srem(_OPS_ACCOUNT_INDEX_PREFIX + record.ops_account_id, key)
+            await pipe.execute()
+
+    async def revoke_all(self, ops_account_id: UUID) -> int:
+        """End every session for an operations account."""
+        index = _OPS_ACCOUNT_INDEX_PREFIX + str(ops_account_id)
+        epoch_key = _OPS_ACCOUNT_REVOCATION_PREFIX + str(ops_account_id)
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.incr(epoch_key)
+            pipe.expire(epoch_key, int(self._absolute.total_seconds()))
+            await pipe.execute()
+        keys: set[str] = await self._client.smembers(index)  # type: ignore[misc]
+        if not keys:
+            return 0
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.delete(*keys)
+            pipe.delete(index)
+            await pipe.execute()
+        return len(keys)
+
+    def _ttl_seconds(self, record: OpsSessionRecord, instant: datetime) -> int:
+        absolute_remaining = datetime.fromisoformat(record.absolute_expires_at) - instant
+        return max(1, int(min(self._idle, absolute_remaining).total_seconds()))
+
+    async def _remove_record(self, key: str, record: OpsSessionRecord) -> None:
+        async with self._client.pipeline(transaction=True) as pipe:
+            pipe.delete(key)
+            pipe.srem(_OPS_ACCOUNT_INDEX_PREFIX + record.ops_account_id, key)
+            await pipe.execute()

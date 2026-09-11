@@ -11,6 +11,11 @@ KINDS = ("recording_consent_notice", "terms_of_use", "privacy_notice")
 BASELINE = "test-legal-baseline"
 
 
+def legal_url(kind: str, version: str) -> str:
+    """A deterministic, non-routable URI used only by the test catalog."""
+    return f"https://legal.example.com/{kind}/{version}"
+
+
 @asynccontextmanager
 async def isolated_legal_catalog(engine):
     """Restore global reference data, even when a test fails or changes versions."""
@@ -30,8 +35,9 @@ async def isolated_legal_catalog(engine):
             for row in original:
                 await db.execute(
                     text(
-                        "insert into legal_document_version (id, kind, version, effective_at, created_at)"
-                        " values (:id, :kind, :version, :effective_at, :created_at)"
+                        "insert into legal_document_version"
+                        " (id, kind, version, url, effective_at, created_at)"
+                        " values (:id, :kind, :version, :url, :effective_at, :created_at)"
                     ),
                     dict(row),
                 )
@@ -42,11 +48,16 @@ async def seed_admitted_accounts(db, org):
     for kind in KINDS:
         await db.execute(
             text(
-                "insert into legal_document_version (id, kind, version, effective_at)"
-                " values (:id, :kind, :version, '1900-01-01T00:00:00Z')"
+                "insert into legal_document_version (id, kind, version, url, effective_at)"
+                " values (:id, :kind, :version, :url, '1900-01-01T00:00:00Z')"
                 " on conflict (kind, version) do nothing"
             ),
-            {"id": new_id(), "kind": kind, "version": BASELINE},
+            {
+                "id": new_id(),
+                "kind": kind,
+                "version": BASELINE,
+                "url": legal_url(kind, BASELINE),
+            },
         )
     accounts = (
         (

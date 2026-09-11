@@ -16,9 +16,12 @@ from __future__ import annotations
 
 from enum import StrEnum
 from functools import lru_cache
+from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import EmailStr, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from bluelab.platform.queue.catalog import Lane
 
 
 class Plane(StrEnum):
@@ -82,12 +85,71 @@ class Settings(BaseSettings):
     # ── C-11 object store (ADR-0025) ──────────────────────────────────────────
     object_store_endpoint: str | None = Field(default=None, alias="OBJECT_STORE_ENDPOINT")
     object_store_bucket: str = Field(default="bluelab-local", alias="OBJECT_STORE_BUCKET")
+    object_store_region: str = Field(default="eu-south-1", alias="OBJECT_STORE_REGION")
     object_store_access_key: SecretStr | None = Field(default=None, alias="OBJECT_STORE_ACCESS_KEY")
     object_store_secret_key: SecretStr | None = Field(default=None, alias="OBJECT_STORE_SECRET_KEY")
+    object_presign_seconds: int = Field(
+        default=300, ge=1, le=300, alias="OBJECT_PRESIGN_SECONDS"
+    )
+
+    # ── shared external-call bounds (architecture/04 §2) ─────────────────────
+    dependency_timeout_seconds: float = Field(
+        default=5.0, gt=0, le=30, alias="DEPENDENCY_TIMEOUT_SECONDS"
+    )
+    dependency_max_attempts: int = Field(
+        default=3, ge=1, le=10, alias="DEPENDENCY_MAX_ATTEMPTS"
+    )
+    dependency_backoff_base_seconds: float = Field(
+        default=0.1, ge=0, le=10, alias="DEPENDENCY_BACKOFF_BASE_SECONDS"
+    )
+    dependency_backoff_max_seconds: float = Field(
+        default=1.0, ge=0, le=30, alias="DEPENDENCY_BACKOFF_MAX_SECONDS"
+    )
+    dependency_circuit_failure_threshold: int = Field(
+        default=5, ge=1, le=100, alias="DEPENDENCY_CIRCUIT_FAILURE_THRESHOLD"
+    )
+    dependency_circuit_recovery_seconds: float = Field(
+        default=30.0, gt=0, le=3600, alias="DEPENDENCY_CIRCUIT_RECOVERY_SECONDS"
+    )
+
+    # ── work plane (ADR-0023; infra/02 §4) ───────────────────────────────────
+    # Deployments select lanes independently, which is how per-type concurrency
+    # is configured without changing the common application image.
+    worker_queues: str = Field(default="dispatch_email", alias="WORKER_QUEUES")
+    worker_concurrency: int = Field(default=10, ge=1, le=100, alias="WORKER_CONCURRENCY")
+    worker_compatibility_delay_seconds: int = Field(
+        default=5, ge=1, le=300, alias="WORKER_COMPATIBILITY_DELAY_SECONDS"
+    )
 
     # ── C-14 email (ADR-0026) ─────────────────────────────────────────────────
     email_transport: EmailTransport = Field(default=EmailTransport.SMTP, alias="EMAIL_TRANSPORT")
-    smtp_url: str | None = Field(default=None, alias="SMTP_URL")
+    email_sender: EmailStr = Field(default="no-reply@example.com", alias="EMAIL_SENDER")
+    email_region: str = Field(default="eu-south-1", alias="EMAIL_REGION")
+    email_sns_topic_arn: str | None = Field(default=None, alias="EMAIL_SNS_TOPIC_ARN")
+    smtp_url: SecretStr | None = Field(
+        default=SecretStr("smtp://localhost:1025"), alias="SMTP_URL"
+    )
+
+    # The same-origin SPA URL used only to construct E-1 links. Paths and secret
+    # fragments are supplied by the closed template, never by configuration.
+    public_app_url: str = Field(
+        default="https://app.example.com", alias="PUBLIC_APP_URL"
+    )
+
+    # E-1's initial credential/reset token exists only long enough for the worker
+    # to render the message. Local uses one AES-256 key; deployed environments
+    # name a KMS key whose IAM grants split encrypt (API) from decrypt (worker).
+    email_delivery_local_key: SecretStr | None = Field(
+        default=None, alias="EMAIL_DELIVERY_LOCAL_KEY"
+    )
+    email_delivery_kms_key_id: str | None = Field(
+        default=None, alias="EMAIL_DELIVERY_KMS_KEY_ID"
+    )
+
+    # Operations TOTP seeds use a separate envelope key. The API has decrypt
+    # capability only on the operations authentication path.
+    ops_totp_local_key: SecretStr | None = Field(default=None, alias="OPS_TOTP_LOCAL_KEY")
+    ops_totp_kms_key_id: str | None = Field(default=None, alias="OPS_TOTP_KMS_KEY_ID")
 
     # ── the call-plane seam (ADR-0071) ────────────────────────────────────────
     # The one shared secret with bluelab-agent-prod.
@@ -141,11 +203,41 @@ class Settings(BaseSettings):
         default=900, ge=30, alias="AUTH_THROTTLE_WINDOW_SECONDS"
     )
     auth_throttle_identifier_attempts: int = Field(
-        default=6, ge=1, alias="AUTH_THROTTLE_IDENTIFIER_ATTEMPTS"
+        default=5, ge=1, alias="AUTH_THROTTLE_IDENTIFIER_ATTEMPTS"
     )
-    # Higher, because one address legitimately carries a whole office behind NAT.
+    auth_backoff_base_seconds: int = Field(
+        default=1, ge=1, alias="AUTH_BACKOFF_BASE_SECONDS"
+    )
+    auth_backoff_max_seconds: int = Field(
+        default=300, ge=1, alias="AUTH_BACKOFF_MAX_SECONDS"
+    )
+    # The source window is independently fixed at the contract's 10/minute.
     auth_throttle_source_attempts: int = Field(
-        default=60, ge=1, alias="AUTH_THROTTLE_SOURCE_ATTEMPTS"
+        default=10, ge=1, alias="AUTH_THROTTLE_SOURCE_ATTEMPTS"
+    )
+    auth_throttle_source_window_seconds: int = Field(
+        default=60, ge=1, alias="AUTH_THROTTLE_SOURCE_WINDOW_SECONDS"
+    )
+
+    password_reset_request_window_seconds: int = Field(
+        default=3600, ge=1, alias="PASSWORD_RESET_REQUEST_WINDOW_SECONDS"
+    )
+    password_reset_request_identifier_attempts: int = Field(
+        default=3, ge=1, alias="PASSWORD_RESET_REQUEST_IDENTIFIER_ATTEMPTS"
+    )
+    password_reset_request_source_attempts: int = Field(
+        default=10, ge=1, alias="PASSWORD_RESET_REQUEST_SOURCE_ATTEMPTS"
+    )
+    password_reset_complete_window_seconds: int = Field(
+        default=3600, ge=1, alias="PASSWORD_RESET_COMPLETE_WINDOW_SECONDS"
+    )
+    password_reset_complete_source_attempts: int = Field(
+        default=10, ge=1, alias="PASSWORD_RESET_COMPLETE_SOURCE_ATTEMPTS"
+    )
+
+    ops_throttle_attempts: int = Field(default=5, ge=1, alias="OPS_THROTTLE_ATTEMPTS")
+    ops_throttle_window_seconds: int = Field(
+        default=60, ge=1, alias="OPS_THROTTLE_WINDOW_SECONDS"
     )
 
     # ── surface-wide request limit (api/05, SEC-004) ──────────────────────────
@@ -182,7 +274,52 @@ class Settings(BaseSettings):
                 "SESSION_ABSOLUTE_SECONDS must exceed SESSION_IDLE_SECONDS "
                 f"({self.session_absolute_seconds} <= {self.session_idle_seconds})"
             )
+        if self.dependency_backoff_max_seconds < self.dependency_backoff_base_seconds:
+            raise ValueError(
+                "DEPENDENCY_BACKOFF_MAX_SECONDS must be at least "
+                "DEPENDENCY_BACKOFF_BASE_SECONDS"
+            )
+        if (self.object_store_access_key is None) != (
+            self.object_store_secret_key is None
+        ):
+            raise ValueError(
+                "OBJECT_STORE_ACCESS_KEY and OBJECT_STORE_SECRET_KEY must be set together"
+            )
+        app_url = urlsplit(self.public_app_url)
+        if (
+            app_url.scheme not in {"http", "https"}
+            or not app_url.hostname
+            or app_url.username is not None
+            or app_url.password is not None
+            or app_url.query
+            or app_url.fragment
+            or app_url.path not in {"", "/"}
+        ):
+            raise ValueError("PUBLIC_APP_URL must be a bare http(s) origin")
+        if self.environment is not Environment.LOCAL and app_url.scheme != "https":
+            raise ValueError("PUBLIC_APP_URL must use https outside local development")
+        if self.email_transport is EmailTransport.SMTP:
+            if self.smtp_url is None:
+                raise ValueError("SMTP_URL is required for the SMTP email transport")
+            smtp_url = urlsplit(self.smtp_url.get_secret_value())
+            if smtp_url.scheme not in {"smtp", "smtps"} or not smtp_url.hostname:
+                raise ValueError("SMTP_URL must use smtp or smtps and include a host")
+        # Parse here so an unknown lane fails process startup instead of becoming
+        # a Procrastinate TaskNotFound failure after a job has been claimed.
+        _ = self.worker_queue_names
         return self
+
+    @property
+    def worker_queue_names(self) -> tuple[Lane, ...]:
+        """The configured, de-duplicated lanes in stable order."""
+        raw_names = [item.strip() for item in self.worker_queues.split(",")]
+        if not raw_names or any(not item for item in raw_names):
+            raise ValueError("WORKER_QUEUES must name at least one queue")
+        try:
+            lanes = tuple(Lane(item) for item in raw_names)
+        except ValueError as exc:
+            raise ValueError("WORKER_QUEUES contains an unknown queue") from exc
+        return tuple(dict.fromkeys(lanes))
 
     @property
     def is_production(self) -> bool:

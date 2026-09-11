@@ -199,7 +199,13 @@ async def _seed(session: AsyncSession, i: dict[str, UUID]) -> None:
         await session.execute(text(sql), params)
 
     for org, name in ((i["org_a"], "Org A"), (i["org_b"], "Org B")):
-        await ex("insert into org (id, name, timezone) values (:id, :n, 'Africa/Cairo')", id=org, n=name)
+        await ex(
+            "insert into org (id, name, registered_domain, timezone)"
+            " values (:id, :n, :domain, 'Africa/Cairo')",
+            id=org,
+            n=name,
+            domain=f"{name.lower()}.example",
+        )
 
     async def account(aid: UUID, org: UUID, team: UUID, role: str, email: str) -> None:
         await ex(

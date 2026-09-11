@@ -80,6 +80,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LegalDocuments" }
+        "503":
+          description: The current legal-document catalog is incomplete; gates remain closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
   # ───────────────────────────── Auth & session ─────────────────────────────
@@ -158,8 +163,8 @@ paths:
         consent checkbox (CMP-002), acknowledge Terms of Use and Privacy Notice (CMP-005) — the
         consent checkbox and terms acknowledgment are distinct controls; completing any subset alone
         does not grant access (AC-IDA-002: consent=false is a 422 and records nothing). Records the
-        consent and acceptance events with document versions. Idempotent replay after success is a
-        no-op 200 (00-contract-overview §6).
+        consent and acceptance events with document versions. A replay after the credential is set
+        answers 409 first-sign-in-not-pending.
       operationId: completeFirstSignIn
       requestBody:
         required: true
@@ -2914,7 +2919,7 @@ components:
       properties:
         version: { type: string }
         effective_at: { type: string, format: date-time }
-        url: { type: string, format: uri, description: The document text (counsel-owned). }
+        url: { type: string, format: uri-reference, description: The document text (counsel-owned). }
 
     SignInRequest:
       type: object
@@ -4185,7 +4190,7 @@ components:
         target_org_id: { type: [string, "null"], format: uuid }
         target_ref:
           type: object
-          description: Ids only, never content.
+          description: Structural references only — ids and the normalized provisioning domain required by AC-IDA-008; never customer content.
           additionalProperties: true
         reason: { type: string }
         occurred_at: { type: string, format: date-time }

@@ -24,6 +24,7 @@ dependencies = [
   "psycopg[binary]",              # migrations + the sync tooling paths
   "procrastinate",                # C-12 — transactional enqueue (ADR-0023)
   "argon2-cffi",                  # C-18 — argon2id (ADR-0028)
+  "cryptography",                 # versioned AEAD envelopes for short-lived E-1 material
   "valkey",                       # C-13 — sessions, leases, registry (ADR-0024)
   "boto3",                        # C-11 object store + C-14 SES + C-17 secrets
   "httpx",

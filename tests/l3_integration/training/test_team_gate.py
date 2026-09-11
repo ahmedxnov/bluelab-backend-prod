@@ -81,8 +81,9 @@ async def privacy_notice(training_engine) -> AsyncIterator[None]:
     async with maker() as session, session.begin():
         await session.execute(
             text(
-                "insert into legal_document_version (id, kind, version, effective_at)"
-                " values (:id, 'recording_consent_notice', '2026.1', now())"
+                "insert into legal_document_version (id, kind, version, url, effective_at)"
+                " values (:id, 'recording_consent_notice', '2026.1',"
+                " 'https://legal.example.com/recording-consent-notice/2026.1', now())"
             ),
             {"id": new_id()},
         )

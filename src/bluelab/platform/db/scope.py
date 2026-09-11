@@ -1,7 +1,7 @@
 """Transaction-local scope context (ADR-0031, decision 1).
 
 Emits `SET LOCAL` for `app.principal_kind`, `app.org_id`, `app.team_id`,
-`app.account_id`, `app.candidate_id`, `app.role` at transaction start. Missing
+`app.account_id`, `app.candidate_id`, `app.ops_account_id`, `app.role` at transaction start. Missing
 context reads as NULL and matches nothing: deny by default.
 
 Workers resolve their context from the job row and set it the same way, so the
@@ -67,10 +67,11 @@ _APPLY_SCOPE: Final = text(
       set_config('app.account_id',     :account_id,     true),
       set_config('app.candidate_id',   :candidate_id,   true),
       set_config('app.position_id',    :position_id,    true),
+      set_config('app.ops_account_id', :ops_account_id, true),
       set_config('app.role',           :role,           true)
     """
 )
-"""All six GUCs in **one** statement.
+"""All scope GUCs in **one** statement.
 
 Six separate `set_config` calls would be six round trips on every transaction —
 including T-1 admission, where the participant is waiting, `admission.wall_ms` is
@@ -129,6 +130,7 @@ class ScopeContext:
     account_id: UUID | None = None
     candidate_id: UUID | None = None
     position_id: UUID | None = None
+    ops_account_id: UUID | None = None
     role: Role | None = None
 
     @classmethod
@@ -208,6 +210,7 @@ class ScopeContext:
             "account_id": _render(self.account_id),
             "candidate_id": _render(self.candidate_id),
             "position_id": _render(self.position_id),
+            "ops_account_id": _render(self.ops_account_id),
             "role": self.role.value if self.role is not None else "",
         }
 

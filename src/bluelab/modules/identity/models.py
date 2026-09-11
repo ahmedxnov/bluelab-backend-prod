@@ -57,6 +57,7 @@ class LegalDocumentVersion(UUIDPrimaryKey, Timestamped, Base):
 
     kind: Mapped[str] = mapped_column(nullable=False)
     version: Mapped[str] = mapped_column(nullable=False)
+    url: Mapped[str] = mapped_column(nullable=False)
     effective_at: Mapped[datetime] = mapped_column(nullable=False)
 
     __table_args__ = (
@@ -71,6 +72,7 @@ class Org(UUIDPrimaryKey, Timestamped, Base):
     __tablename__ = "org"
 
     name: Mapped[str] = mapped_column(nullable=False)
+    registered_domain: Mapped[str] = mapped_column(nullable=False)
     timezone: Mapped[str] = mapped_column(nullable=False, server_default=text("'Africa/Cairo'"))
     """The org's civil calendar.
 

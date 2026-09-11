@@ -26,6 +26,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from bluelab.api import auth, team, training
+from bluelab.modules.identity import router as identity_router
 
 PREFIX = "/api/v1"
 
@@ -36,6 +37,7 @@ router = APIRouter(prefix=PREFIX)
 # through their own dependencies. The contract's global `security` is the
 # *default*, and `POST /auth/session` overrides it to `[]` (api/openapi.yaml).
 router.include_router(auth.router)
+router.include_router(identity_router.router)
 
 # The rep surface. Every route takes `CurrentPrincipal`, so the global
 # `sessionCookie` requirement applies and a gate-limited session is refused with

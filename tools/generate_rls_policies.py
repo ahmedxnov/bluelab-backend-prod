@@ -16,6 +16,7 @@ Every policy reads the transaction-local GUCs that
 
     app.principal_kind   account | candidate | ops | system
     app.org_id  app.team_id  app.account_id  app.candidate_id
+    app.ops_account_id
     app.position_id      (route-back — see platform/db/scope.py)
     app.role
 
@@ -80,6 +81,7 @@ TEAM = "nullif(pg_catalog.current_setting('app.team_id', true), '')::uuid"
 ACCOUNT = "nullif(pg_catalog.current_setting('app.account_id', true), '')::uuid"
 CANDIDATE = "nullif(pg_catalog.current_setting('app.candidate_id', true), '')::uuid"
 POSITION = "nullif(pg_catalog.current_setting('app.position_id', true), '')::uuid"
+OPS_ACCOUNT = "nullif(pg_catalog.current_setting('app.ops_account_id', true), '')::uuid"
 ROLE = "nullif(pg_catalog.current_setting('app.role', true), '')"
 
 IS_ACCOUNT = f"{KIND} = 'account'"
@@ -897,7 +899,14 @@ def build(policy: TablePolicy) -> list[Policy]:
     # The system context reaches everything inside its org. Workers resolve scope
     # from the job row, so the work plane has no unscoped path (ADR-0005).
     system_predicate = _and(IS_SYSTEM, _org_match(policy)) if policy.org_scoped else IS_SYSTEM
-    for command in ("select", "insert", "update"):
+    system_commands: tuple[str, ...]
+    if policy.system_append_only:
+        system_commands = ("select", "insert")
+    elif policy.system_delete:
+        system_commands = ("select", "insert", "update", "delete")
+    else:
+        system_commands = ("select", "insert", "update")
+    for command in system_commands:
         out.append(
             Policy(
                 table=table,
@@ -905,11 +914,9 @@ def build(policy: TablePolicy) -> list[Policy]:
                 command=command,
                 using=None if command == "insert" else system_predicate,
                 check=system_predicate if command in ("insert", "update") else None,
-                # NO DELETE, for the same reason no principal has it: erasure is
-                # the only remover (data/00 §2, ADR-0033), and the retention
-                # sweeps are SECURITY DEFINER procedures rather than policy-bound
-                # queries — ADR-0031 enumerates both as escape hatches. A `for
-                # all` here would have been the one place the rule was skipped.
+                # DELETE remains absent unless the declaration names a concrete
+                # lifecycle that requires it. E-1 delivery material is the one
+                # current case; ordinary records remain removal-denied.
                 comment=(
                     "work plane and internal procedures, org-bounded"
                     if command == "select"
@@ -945,13 +952,12 @@ def build(policy: TablePolicy) -> list[Policy]:
                 comment="own org, read only",
             )
         )
-        out.append(
-            Policy(
+        out.extend(
+            _grants(
+                policy,
                 table=table,
-                name="ops_verbs",
-                command="all",
-                using=IS_OPS,
-                check=IS_OPS,
+                name="ops",
+                predicate=IS_OPS,
                 comment="provisioning verbs (ADR-0010)",
             )
         )
@@ -975,13 +981,12 @@ def build(policy: TablePolicy) -> list[Policy]:
                 comment="a manager sees its own team",
             )
         )
-        out.append(
-            Policy(
+        out.extend(
+            _grants(
+                policy,
                 table=table,
-                name="ops_verbs",
-                command="all",
-                using=IS_OPS,
-                check=IS_OPS,
+                name="ops",
+                predicate=IS_OPS,
                 comment="provision, deactivate, change team mapping",
             )
         )
@@ -1107,7 +1112,7 @@ def build(policy: TablePolicy) -> list[Policy]:
             out.append(_candidate_read(policy))
 
     elif cls is PolicyClass.P9_OPS:
-        if policy.system_write_only:
+        if policy.system_write_only or policy.system_append_only:
             out.append(
                 Policy(
                     table=table,

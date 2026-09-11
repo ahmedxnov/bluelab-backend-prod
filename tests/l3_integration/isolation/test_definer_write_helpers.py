@@ -58,10 +58,15 @@ async def published(migration_engine):
         for kind, version in (("recording_consent_notice", NOTICE), ("privacy_notice", NOTICE), ("terms_of_use", TERMS)):
             await s.execute(
                 text(
-                    "insert into legal_document_version (id, kind, version, effective_at)"
-                    " values (:id, :kind, :version, now())"
+                    "insert into legal_document_version (id, kind, version, url, effective_at)"
+                    " values (:id, :kind, :version, :url, now())"
                 ),
-                {"id": new_id(), "kind": kind, "version": version},
+                {
+                    "id": new_id(),
+                    "kind": kind,
+                    "version": version,
+                    "url": f"https://legal.example.com/{kind}/{version}",
+                },
             )
     yield
     async with maker() as s, s.begin():

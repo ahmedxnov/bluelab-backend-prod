@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, text
+from sqlalchemy import ForeignKey, Index, LargeBinary, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from bluelab.platform.db.base import Base, Timestamped, UUIDPrimaryKey, enum_check
@@ -54,6 +54,7 @@ class OpsAccount(UUIDPrimaryKey, Timestamped, Base):
     email: Mapped[str] = mapped_column(nullable=False)
     display_name: Mapped[str] = mapped_column(nullable=False)
     password_hash: Mapped[str] = mapped_column(nullable=False)
+    totp_secret_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     status: Mapped[str] = mapped_column(nullable=False, server_default=text("'active'"))
 
     __table_args__ = (
@@ -80,7 +81,7 @@ class OpsAudit(UUIDPrimaryKey, Base):
     target_ref: Mapped[dict[str, Any]] = mapped_column(
         SNAPSHOT_TYPE, nullable=False, server_default=text("'{}'")
     )
-    """**Ids only, never content** (ADR-0010 §3)."""
+    """Structural references only: ids and normalized provisioning domains."""
 
     reason: Mapped[str] = mapped_column(nullable=False)
     """Mandatory on every mutation — the `reason-required` problem exists to
