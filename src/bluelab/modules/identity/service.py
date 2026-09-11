@@ -38,6 +38,7 @@ rather than with the caller's good intentions.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -373,13 +374,20 @@ async def record_acceptances(
     await _record_instruments(session, consent=bool(consent), terms=bool(terms_accepted))
 
 
-def view(account: Account, org: Org, gates: tuple[Gate, ...]) -> SessionView:
+def view(
+    account: Account,
+    org: Org,
+    gates: tuple[Gate, ...],
+    *,
+    session_expires_at: datetime,
+) -> SessionView:
     """Render the principal as the contract's session body.
 
     Args:
         account: The signed-in account.
         org: Its org.
         gates: Gates currently blocking full access.
+        session_expires_at: Effective idle-or-absolute session expiry.
 
     Returns:
         The `SessionView` both session endpoints answer with.
@@ -392,6 +400,7 @@ def view(account: Account, org: Org, gates: tuple[Gate, ...]) -> SessionView:
         team_id=account.team_id,
         org=OrgView(id=org.id, name=org.name, timezone=org.timezone),
         pending_gates=list(gates),
+        session_expires_at=session_expires_at,
     )
 
 

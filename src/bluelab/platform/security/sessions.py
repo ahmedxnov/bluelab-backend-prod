@@ -111,13 +111,14 @@ class SessionStore:
         team_id: UUID,
         role: str,
         gate: str | None = None,
+        opened_at: datetime | None = None,
     ) -> str:
         """Open a session and return the raw id for the cookie.
 
         The raw id is returned once and never stored; only its hash is persisted.
         """
         raw = mint_token()
-        instant = now()
+        instant = opened_at or now()
         record = SessionRecord(
             account_id=str(account_id),
             org_id=str(org_id),
@@ -136,6 +137,16 @@ class SessionStore:
             pipe.expire(_ACCOUNT_INDEX_PREFIX + str(account_id), int(self._absolute.total_seconds()))
             await pipe.execute()
         return raw
+
+    def new_session_expires_at(self, opened_at: datetime) -> datetime:
+        """Return the effective expiry for a session opened at ``opened_at``."""
+        return min(opened_at + self._idle, opened_at + self._absolute)
+
+    def effective_expires_at(self, record: SessionRecord) -> datetime:
+        """Return the nearer sliding-idle or fixed-absolute expiry."""
+        idle_expiry = datetime.fromisoformat(record.last_seen_at) + self._idle
+        absolute_expiry = datetime.fromisoformat(record.absolute_expires_at)
+        return min(idle_expiry, absolute_expiry)
 
     async def resolve(self, raw: str) -> SessionRecord | None:
         """Look up a session and slide its idle clock.

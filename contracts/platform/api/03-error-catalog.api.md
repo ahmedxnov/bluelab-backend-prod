@@ -113,6 +113,7 @@ successful `200` whose status field reads as preparing, [FR-SCR-009](../specs/14
 | `decision-frozen` | 409 | Decision change after shortlist inclusion ([FR-HIR-013](../specs/22-hiring-manager.spec.md), [AC-HIR-005](../specs/22-hiring-manager.spec.md)) | |
 | `candidate-not-decidable` | 409 | Decision on a candidate with no completed/incomplete evidence yet | |
 | `shortlist-empty` | 409 | Shortlist send with no includable (approved, unsent) candidates ([FR-HIR-014](../specs/22-hiring-manager.spec.md)) | |
+| `recipient-confirmation-required` | 422 | Shortlist recipients were not explicitly confirmed, or the acknowledged new-domain set differs from the server-derived set ([SEC-011](../specs/02-security-requirements.spec.md)) | `meta.recipients`, `meta.new_domains` |
 | `pdf-not-ready` | 409 | PDF fetch while `pdf_status` ∈ `none|pending|failed` ([FR-HIR-012](../specs/22-hiring-manager.spec.md)) | `meta.pdf_status` |
 | `idempotency-key-reuse` | 409 | Same `Idempotency-Key`, different body ([ADR-0040](adr/0040-idempotency-strategy.md)) | |
 | `idempotency-key-required` | 422 | Batch/send POST without the header — a validation failure like any other missing required element (gate F-5) | |

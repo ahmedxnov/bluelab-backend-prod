@@ -13,7 +13,7 @@ There is no self-service signup anywhere in BlueLab, and there are exactly **two
 ## Functional Requirements
 
 ### FR-IDA-001: Operator provisioning `[Must]`
-When BlueLab Internal Operations submits a customer roster entry of {email, role ∈ manager | rep, org — and, for a rep, their manager}, the system shall create an account with that email as its username, in that org, with that role, and (for reps) in that manager's team.
+Each customer org shall carry one registered email domain. When BlueLab Internal Operations submits a customer roster entry of {email, role ∈ manager | rep, org — and, for a rep, their manager}, the system shall create an account with that email as its username, in that org, with that role, and (for reps) in that manager's team only when the normalized email domain exactly matches the org's registered domain. A mismatched domain shall be refused and the attempted provisioning shall be audited with its reason ([SEC-040](02-security-requirements.spec.md)).
 
 ### FR-IDA-002: No self-registration `[Must]`
 The system shall provide no self-registration path for any role.
@@ -97,6 +97,12 @@ Given two managers A and B in the same org, each with their own reps
 When manager A requests any of manager B's team data — a rep deep dive, a review, a drill, a drill's statistics, a knowledge document, or a position
 Then the request is denied
 And nothing of team B is reachable from team A in any surface.
+
+### AC-IDA-008: Provisioning is domain-bound
+Given an org whose registered domain is `example.com`
+When an operator attempts to provision `rep@other.example` into that org
+Then the account is not created
+And the refused attempt is auditable with the actor, target org, email domain, and reason.
 
 ## Provenance
 

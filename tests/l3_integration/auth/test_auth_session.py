@@ -12,6 +12,8 @@ safe one.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
@@ -54,6 +56,24 @@ async def test_valid_credentials_establish_a_session(client, world, credentials)
     assert body["role"] == "manager"
     assert body["org"]["timezone"] == "Africa/Cairo"
     assert body["pending_gates"] == []
+
+
+async def test_session_view_carries_the_effective_expiry(client, world, credentials):
+    """The SPA warns before expiry from a server deadline, never from a guessed TTL."""
+    before = datetime.now(UTC)
+    response = await client.post("/api/v1/auth/session", json=credentials(world.manager_email))
+    after = datetime.now(UTC)
+
+    assert response.status_code == 200
+    expires_at = datetime.fromisoformat(response.json()["session_expires_at"])
+    settings = app_settings()
+    assert before + timedelta(seconds=settings.session_idle_seconds) <= expires_at
+    assert expires_at <= after + timedelta(seconds=settings.session_idle_seconds)
+    assert expires_at < before + timedelta(seconds=settings.session_absolute_seconds)
+
+    refreshed = await client.get("/api/v1/auth/session")
+    refreshed_expiry = datetime.fromisoformat(refreshed.json()["session_expires_at"])
+    assert refreshed_expiry >= expires_at
 
 
 @pytest.mark.verifies("SEC-002")

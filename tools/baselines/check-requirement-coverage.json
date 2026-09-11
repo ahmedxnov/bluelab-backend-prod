@@ -1,6 +1,6 @@
 {
   "note": "Requirements with no live test yet (quality/08 \u00a75, ADR-0062). This list may only shrink.",
-  "count": 125,
+  "count": 124,
   "gaps": [
     "CMP-003",
     "FR-CND-001",
@@ -111,7 +111,6 @@
     "SEC-020",
     "SEC-021",
     "SEC-022",
-    "SEC-024",
     "SEC-025",
     "SEC-027",
     "SEC-028",

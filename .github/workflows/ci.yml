@@ -65,6 +65,9 @@ jobs:
           lint-imports
           python tools/scan_tier_branches.py
           python tools/audit_cookie_attributes.py
+          python tools/check_telemetry_content_free.py
+          python tools/check_fixture_safety.py
+          git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
       - name: Contract and requirement ratchets
         run: |
           python tools/check_conformance_diff.py

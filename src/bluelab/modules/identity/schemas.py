@@ -19,6 +19,7 @@ add a field without a version bump.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -102,3 +103,5 @@ class SessionView(BaseModel):
     org: OrgView
     pending_gates: list[Gate]
     """Gates blocking full access; empty when none (api/00 §3)."""
+    session_expires_at: datetime
+    """The nearer idle or absolute expiry, for the proactive client warning."""

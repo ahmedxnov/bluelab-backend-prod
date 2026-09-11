@@ -191,9 +191,12 @@ async def handle_http_exception(request: Request, exc: Exception) -> Response:
 
 
 async def handle_unexpected(request: Request, exc: Exception) -> Response:
-    """The catch-all: `500 internal-error`, no detail, full trace to the log."""
+    """The catch-all: `500 internal-error`, with content-free diagnostics."""
     request_id = current_request_id()
-    _log.exception("unhandled_exception", extra={"request_id": request_id})
+    _log.error(
+        "unhandled_exception",
+        extra={"request_id": request_id, "error_class": type(exc).__name__},
+    )
     return render_problem(catalog.INTERNAL_ERROR, request_id=request_id)
 
 

@@ -1,40 +1,54 @@
-/* Design tokens — the single source, declared once as CSS custom properties.
- *
- * Tailwind CSS v4 `@theme` (ADR-0042). These same variables style the report PDF
- * templates, so the on-screen and printed forms stay visually kin without
- * duplicated style constants (ADR-0021).
- *
- * Full values and their rationale: ux/01 §2–§4. Summarised here so the shape is
- * visible, never re-decided:
- *
- *   neutrals & brand   --bg-page --bg-surface --bg-sunken --border --border-strong
- *                      --ink --ink-secondary --ink-muted
- *                      --primary --primary-hover --primary-tint --accent-self
- *
- *   the sacred triple  green ≥ 7.5 · amber ≥ 5.5 · red below (FR-SCR-005).
- *                      Each band has a TEXT/ICON form (AA on white) and a FILL
- *                      form at 600 weight, because the 500-weight tones fail
- *                      WCAG 1.4.11 on light surfaces (gate F-2). Plus a tint bg.
- *
- *   live               --live, reserved EXCLUSIVELY for the in-call surface, so
- *                      red-as-band and red-as-live never sit on one screen.
- *
- *   type               IBM Plex Sans / Mono / Sans Arabic; scale display · title ·
- *                      body · body-sm · eyebrow · score-xl · arabic-body.
- *                      Body never below 16px. Tabular numerals wherever numbers
- *                      align in columns.
- *
- *   space              4-base: 4 8 12 16 24 32 48 64
- *   radius             6 inputs/buttons/pills · 10 cards · 999 avatars/count pills
- *   elevation          e0 flat · e1 cards · e2 overlays. Nothing else.
- *   motion             150–200ms ease-out on transform/opacity/color only.
- *                      Three sanctioned animations: state transitions, the LIVE
- *                      pulse, skeleton shimmer — all honour prefers-reduced-motion.
- *   z-scale            10 sticky sub-headers · 20 sidebar · 30 toasts · 50 dialogs
- *
- * Light theme only in v1. Dark mode is not designed — no requirement asks for it,
- * and the token layer keeps it possible.
- *
- * Colour is reserved for meaning (bands, statuses, speakers) and never used as
- * decoration. No gradients-as-branding, no AI purple/pink (P-3, ux/01 §1).
- */
+@theme {
+  --color-page: var(--bg-page);
+  --color-surface: var(--bg-surface);
+  --color-sunken: var(--bg-sunken);
+  --color-ink: var(--ink);
+  --color-primary: var(--primary);
+  --font-sans: "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+}
+
+:root {
+  color-scheme: light;
+  --bg-page: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-sunken: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --ink: #0f172a;
+  --ink-secondary: #334155;
+  --ink-muted: #64748b;
+  --primary: #1e40af;
+  --primary-hover: #1e3a8a;
+  --primary-tint: #eff4ff;
+  --accent-self: #0f766e;
+  --green-text: #15803d;
+  --green-fill: #16a34a;
+  --green-tint: #f0fdf4;
+  --amber-text: #b45309;
+  --amber-fill: #d97706;
+  --amber-tint: #fffbeb;
+  --red-text: #b91c1c;
+  --red-fill: #dc2626;
+  --red-tint: #fef2f2;
+  --live: #dc2626;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-round: 999px;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 6%);
+  --shadow-overlay: 0 8px 24px rgb(15 23 42 / 14%);
+  --motion-fast: 150ms ease-out;
+  --motion-standard: 200ms ease-out;
+  --z-sticky: 10;
+  --z-sidebar: 20;
+  --z-toast: 30;
+  --z-dialog: 50;
+}

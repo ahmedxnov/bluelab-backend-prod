@@ -1,6 +1,6 @@
 {
   "note": "Contract elements with no implementation yet (api C-2, ADR-0035). This list may only shrink.",
-  "count": 69,
+  "count": 70,
   "gaps": [
     "operation:DELETE /api/v1/calls/current",
     "operation:DELETE /api/v1/drills/{drill_id}/rubric/dimensions/{dimension_id}",
@@ -70,6 +70,7 @@
     "operation:PUT /api/v1/positions/{position_id}/assessment",
     "operation:PUT /api/v1/product-documents/{document_id}/draft",
     "problem:method-not-allowed",
+    "problem:recipient-confirmation-required",
     "problem:webhook-signature-invalid"
   ]
 }

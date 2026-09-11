@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -36,6 +37,8 @@ tiers = importlib.import_module("scan_tier_branches")
 cookies = importlib.import_module("audit_cookie_attributes")
 ratchet = importlib.import_module("_ratchet")
 mutation = importlib.import_module("check_mutation_score")
+telemetry = importlib.import_module("check_telemetry_content_free")
+fixtures = importlib.import_module("check_fixture_safety")
 
 pytestmark = [pytest.mark.l1_unit, pytest.mark.build_gate]
 
@@ -628,6 +631,149 @@ def test_the_committed_cookie_module_conforms():
     assert cookies.check_attributes() == []
 
 
+# ── content-free telemetry ───────────────────────────────────────────────────
+
+
+def test_a_dynamic_log_event_is_rejected(tmp_path):
+    write(tmp_path / "events.py", "def emit(_log, event):\n    _log.info(event)\n")
+
+    assert kinds(telemetry.scan_source(tmp_path)) == {"dynamic-event"}
+
+
+def test_a_content_field_is_rejected_even_when_nested(tmp_path):
+    write(
+        tmp_path / "events.py",
+        'def emit(_log):\n    _log.info("call_failed", extra={"payload": {"transcript": "x"}})\n',
+    )
+
+    assert kinds(telemetry.scan_source(tmp_path)) == {"content-field"}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'def emit(_log):\n    _log.exception("call_failed")\n',
+        'def emit(_log):\n    _log.error("call_failed", exc_info=True)\n',
+    ],
+)
+def test_a_raw_exception_payload_is_rejected(tmp_path, source):
+    write(tmp_path / "events.py", source)
+
+    assert kinds(telemetry.scan_source(tmp_path)) == {"exception-payload"}
+
+
+def test_direct_opentelemetry_emission_bypasses_the_chokepoint(tmp_path):
+    write(tmp_path / "events.py", "from opentelemetry import metrics\n")
+
+    assert kinds(telemetry.scan_source(tmp_path)) == {"telemetry-bypass"}
+
+
+def test_database_and_cache_methods_are_not_mistaken_for_metrics(tmp_path):
+    write(
+        tmp_path / "storage.py",
+        "def store(session, cache, row):\n    session.add(row)\n    cache.set('key', 'value')\n",
+    )
+
+    assert telemetry.scan_source(tmp_path) == []
+
+
+@pytest.mark.verifies("SEC-024")
+def test_the_committed_telemetry_boundary_is_content_free():
+    assert telemetry.check_structure() == []
+    assert telemetry.scan_source(telemetry.BACKEND_SRC) == []
+
+
+# ── secret scan ───────────────────────────────────────────────────────────────
+
+
+def test_every_probe_source_is_part_of_the_tracked_secret_scan_input():
+    probe_sources = {
+        path.relative_to(BACKEND_ROOT).as_posix()
+        for path in (BACKEND_ROOT / "tests").rglob("*.py")
+        if "_probe" in path.read_text(encoding="utf-8")
+    }
+    tracked_process = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={BACKEND_ROOT.as_posix()}",
+            "ls-files",
+            "-z",
+            "--",
+            "tests",
+        ],
+        cwd=BACKEND_ROOT,
+        check=True,
+        capture_output=True,
+    )
+    tracked = set(tracked_process.stdout.decode().strip("\0").split("\0"))
+
+    assert probe_sources
+    assert probe_sources <= tracked
+
+
+def test_the_secret_hook_refuses_a_new_credential(tmp_path):
+    value = "ghp_" + "".join(  # noqa: FLY002 - keep the scanner probe out of source
+        ("A1b2C3d4", "E5f6G7h8", "I9j0K1l2", "M3n4O5p6")
+    )
+    probe = write(
+        tmp_path / "credential.py",
+        "credential = " + repr(value) + "\n",
+    )
+    executable = Path(sys.executable).with_name(
+        "detect-secrets-hook.exe" if sys.platform == "win32" else "detect-secrets-hook"
+    )
+
+    completed = subprocess.run(
+        [str(executable), "--baseline", str(BACKEND_ROOT / ".secrets.baseline"), str(probe)],
+        cwd=BACKEND_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Potential secrets" in completed.stdout
+
+
+# ── fixture safety ────────────────────────────────────────────────────────────
+
+
+def test_a_non_reserved_email_is_not_a_synthetic_identity(tmp_path):
+    domain = "actual-" + "customer.com"
+    write(tmp_path / "test_identity.py", f'EMAIL = "person@{domain}"\n')
+
+    assert kinds(fixtures.scan_test_identities(tmp_path)) == {"non-synthetic-identity"}
+
+
+def test_fixture_content_without_provenance_is_rejected(tmp_path):
+    write(tmp_path / "vendor" / "response.json", "{}\n")
+
+    assert kinds(fixtures.scan_fixture_provenance(tmp_path)) == {"provenance-missing"}
+
+
+def test_a_declared_synthetic_fixture_is_admitted(tmp_path):
+    data_path = write(tmp_path / "sample.json", "{}\n")
+    write(
+        tmp_path / "sample.json.provenance.json",
+        json.dumps(
+            {
+                "fixture": data_path.name,
+                "production_data": False,
+                "source_class": "synthetic",
+                "source_code": "SYN-TEST",
+                "version": 1,
+            }
+        ),
+    )
+
+    assert fixtures.scan_fixture_provenance(tmp_path) == []
+
+
+def test_the_committed_fixture_boundary_is_safe():
+    assert fixtures.check() == []
+
+
 # ── mutation testing: the band, and the gate on it ────────────────────────────
 #
 # mutmut refuses to run on native Windows, so none of this executes a mutation
@@ -862,8 +1008,8 @@ def test_killing_a_mutant_forces_the_baseline_down(stats):
 
 @pytest.mark.parametrize(
     "tool",
-    [conformance, coverage, tiers, cookies],
-    ids=["conformance", "coverage", "tiers", "cookies"],
+    [conformance, coverage, tiers, cookies, telemetry, fixtures],
+    ids=["conformance", "coverage", "tiers", "cookies", "telemetry", "fixtures"],
 )
 def test_a_clean_repository_exits_zero(tool, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["tool"])

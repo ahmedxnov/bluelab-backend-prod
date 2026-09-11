@@ -62,6 +62,7 @@ from bluelab.modules.identity.schemas import (
     SessionView,
     SignInRequest,
 )
+from bluelab.platform.clock import now
 from bluelab.platform.config import Settings, get_settings
 from bluelab.platform.db.scope import ScopeContext
 from bluelab.platform.db.session import scoped_transaction
@@ -156,7 +157,13 @@ async def sign_in(
     async with scoped_transaction(scope) as db:
         account, org = await service.load_principal(db, authenticated.account_id)
         gates = (authenticated.gate,) if authenticated.gate else await pending_gates(db, account)
-        view = service.view(account, org, gates)
+        opened_at = now()
+        view = service.view(
+            account,
+            org,
+            gates,
+            session_expires_at=store.new_session_expires_at(opened_at),
+        )
 
     raw = await store.create(
         account_id=authenticated.account_id,
@@ -173,6 +180,7 @@ async def sign_in(
         # `pending_gates` returns them in precedence order and `SessionRecord.gate`
         # holds one value, so the first is the one that limits the session.
         gate=gates[0] if gates else None,
+        opened_at=opened_at,
     )
     set_session_cookie(response, _spec(settings), raw)
     # Last, once the sign-in has actually succeeded. The counters then measure
@@ -187,7 +195,7 @@ async def sign_in(
     response_model=SessionView,
     summary="Current session and pending gates",
 )
-async def get_session(record: GatedPrincipal) -> SessionView:
+async def get_session(record: GatedPrincipal, store: SessionStoreDep) -> SessionView:
     """The current principal, re-read from the database.
 
     Takes `GatedPrincipal`, not `CurrentPrincipal`: this is the endpoint a
@@ -198,7 +206,12 @@ async def get_session(record: GatedPrincipal) -> SessionView:
     async with scoped_transaction(scope_of(record)) as db:
         account, org = await service.load_principal(db, UUID(record.account_id))
         gates = await pending_gates(db, account)
-        return service.view(account, org, gates)
+        return service.view(
+            account,
+            org,
+            gates,
+            session_expires_at=store.effective_expires_at(record),
+        )
 
 
 async def _rotate(store: SessionStore, raw: str, *, gate: Gate | None) -> str:
@@ -260,7 +273,12 @@ async def complete_first_sign_in(
         )
         account, org = await service.load_principal(db, UUID(record.account_id))
         gates = await pending_gates(db, account)
-        view = service.view(account, org, gates)
+        view = service.view(
+            account,
+            org,
+            gates,
+            session_expires_at=store.effective_expires_at(record),
+        )
 
     rotated = await _rotate(store, raw, gate=gates[0] if gates else None)
     set_session_cookie(response, _spec(settings), rotated)
@@ -298,7 +316,12 @@ async def record_acceptances(
         )
         account, org = await service.load_principal(db, UUID(record.account_id))
         gates = await pending_gates(db, account)
-        view = service.view(account, org, gates)
+        view = service.view(
+            account,
+            org,
+            gates,
+            session_expires_at=store.effective_expires_at(record),
+        )
 
     rotated = await _rotate(store, raw, gate=gates[0] if gates else None)
     set_session_cookie(response, _spec(settings), rotated)
