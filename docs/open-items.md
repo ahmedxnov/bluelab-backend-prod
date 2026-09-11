@@ -17,21 +17,17 @@ checking before first real use.
 
 ## CI defects
 
-### OI-21 · First GitHub Actions backend gate is red
-**Status:** verify · **Raised:** Phase 1 Tasks 16–19 runner verification, 2026-09-06 · **Evidence:** [run 33975393447](https://github.com/ahmedxnov/bluelab-backend-prod/actions/runs/33975393447)
+### OI-21 · Backend GitHub Actions gate
+**Status:** closed 2026-09-11 · **Raised:** Phase 1 Tasks 16–19 runner verification, 2026-09-06 · **Evidence:** [run 34564781218](https://github.com/ahmedxnov/bluelab-backend-prod/actions/runs/34564781218)
 
-The first `backend-ci` run on GitHub-hosted `ubuntu-24.04` for remote commit
-`0ee1ddbc3e7a7c40797d2b7c79eae7af256f559a` failed in **Verify vendored
-boundaries** (exit 1): `verify_contract_lock.py` found that the locked
-`api/openapi.yaml` hash (`2f9ad…55a4`) differs from the vendored file
-(`10d5d…127b2`). The subsequent static, ratchet, test, and container stages were
-skipped. This is a CI defect, not an environment waiver: repair the incompatible
-remote contract snapshot/lock pair and retain a green runner result before treating
-the backend gate as established.
+`backend-ci` completes on GitHub-hosted `ubuntu-24.04` for commit
+`d6355e0ce88f8b75737f7b04bd7405e5c8c3658c`. The gate verifies the locked
+contract and runtime snapshots, applies the Alembic lineage and generated SQL
+modules to a clean PostgreSQL 16 database, and passes the static, architecture,
+ratchet, and full test stages.
 
-The run also reports the GitHub Actions Node 20 deprecation warning for the pinned
-checkout and setup-python action revisions. Update those action revisions as a
-separate reviewed workflow maintenance change; it did not cause this failure.
+The green run emits a non-failing Node 20 deprecation warning for pinned action
+revisions. Action-runtime maintenance remains a separate reviewed workflow change.
 
 ---
 
