@@ -1,5 +1,6 @@
 /.gitattributes text eol=lf
 /.secrets.baseline text eol=lf
 /contracts/** text eol=lf
+/src/bluelab_runtime_bundle/** text eol=lf
 /templates/report/*.css text eol=lf
 /templates/report/*.json text eol=lf
