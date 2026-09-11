@@ -53,6 +53,11 @@ jobs:
           -v ON_ERROR_STOP=1 -v migration_role=bluelab -v app_role=bluelab_app
           -v role_password=bluelab -v database_name=bluelab_test
           -f sql/roles/bootstrap.sql
+      - name: Initialize the test database
+        run: |
+          python -m alembic upgrade head
+          python tools/generate_rls_policies.py
+          python tools/check_rls_drift.py --apply
       - name: Verify vendored boundaries
         run: |
           python tools/verify_contract_lock.py

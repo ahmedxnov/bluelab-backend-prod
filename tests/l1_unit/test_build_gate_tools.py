@@ -1105,6 +1105,25 @@ def test_local_runtime_and_migrations_use_different_database_roles():
     assert urlsplit(environment["MIGRATION_DATABASE_URL"]).username == "bluelab"
 
 
+def test_backend_ci_initializes_the_database_before_integration_tests():
+    """A fresh hosted runner has roles but no application schema until the
+    migration lineage and generated SQL modules are applied."""
+    workflow = yaml.safe_load(
+        (BACKEND_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["quality"]["steps"]
+    named_steps = {step.get("name"): (index, step) for index, step in enumerate(steps)}
+
+    bootstrap_index, _ = named_steps["Bootstrap database roles"]
+    initialize_index, initialize = named_steps["Initialize the test database"]
+    test_index, _ = named_steps["Test"]
+
+    assert bootstrap_index < initialize_index < test_index
+    assert "python -m alembic upgrade head" in initialize["run"]
+    assert "python tools/generate_rls_policies.py" in initialize["run"]
+    assert "python tools/check_rls_drift.py --apply" in initialize["run"]
+
+
 def test_platform_reference_seed_is_a_fixed_data_migration():
     """The local bootstrap must not rely on an out-of-band seed fixture.
 
