@@ -12,15 +12,26 @@ safe one.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from tests.l3_integration.auth.conftest import app_settings
+from tests.legal_fixtures import seed_admitted_accounts
 
 pytestmark = [
     pytest.mark.l3_integration,
     pytest.mark.l7_security,
     pytest.mark.invariant_path,
 ]
+
+@pytest_asyncio.fixture(autouse=True)
+async def admitted_baseline(auth_engine, world):
+    async with async_sessionmaker(auth_engine)() as db, db.begin():
+        await seed_admitted_accounts(db, world.org)
+
 
 SESSION_COOKIE = "__Host-bluelab_session"
 
@@ -45,6 +56,24 @@ async def test_valid_credentials_establish_a_session(client, world, credentials)
     assert body["role"] == "manager"
     assert body["org"]["timezone"] == "Africa/Cairo"
     assert body["pending_gates"] == []
+
+
+async def test_session_view_carries_the_effective_expiry(client, world, credentials):
+    """The SPA warns before expiry from a server deadline, never from a guessed TTL."""
+    before = datetime.now(UTC)
+    response = await client.post("/api/v1/auth/session", json=credentials(world.manager_email))
+    after = datetime.now(UTC)
+
+    assert response.status_code == 200
+    expires_at = datetime.fromisoformat(response.json()["session_expires_at"])
+    settings = app_settings()
+    assert before + timedelta(seconds=settings.session_idle_seconds) <= expires_at
+    assert expires_at <= after + timedelta(seconds=settings.session_idle_seconds)
+    assert expires_at < before + timedelta(seconds=settings.session_absolute_seconds)
+
+    refreshed = await client.get("/api/v1/auth/session")
+    refreshed_expiry = datetime.fromisoformat(refreshed.json()["session_expires_at"])
+    assert refreshed_expiry >= expires_at
 
 
 @pytest.mark.verifies("SEC-002")
@@ -199,7 +228,7 @@ async def test_publishing_a_notice_version_opens_the_consent_gate(
     every affected account rewritten at publish time, and the first one missed
     keeps access it should have been re-asked for.
     """
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
@@ -211,7 +240,7 @@ async def test_publishing_a_notice_version_opens_the_consent_gate(
 async def test_recording_consent_clears_the_gate(
     client, world, credentials, legal_version, record_consent
 ):
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await record_consent(world.rep, "2026.1")
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
@@ -229,9 +258,9 @@ async def test_consent_to_an_older_version_does_not_satisfy_a_new_one(
     change to the notice would ship with everyone silently still consented to the
     old text, which is the failure the requirement exists to prevent.
     """
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await record_consent(world.rep, "2026.1")
-    await legal_version("privacy_notice", "2026.2", effective_offset=1)
+    await legal_version("recording_consent_notice", "2026.2", effective_offset=0)
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
@@ -244,7 +273,7 @@ async def test_terms_are_a_separate_instrument_from_consent(
 ):
     """Consent and terms are distinct instruments (CMP-002 vs CMP-005), and one
     does not imply the other. Both pending is both listed, in precedence order."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
 
     both = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
@@ -261,7 +290,7 @@ async def test_one_accounts_consent_does_not_satisfy_another(
 ):
     """The helper runs with BYPASSRLS, so its `account_id` filter is the only thing
     keeping one person's acceptance from answering for everyone."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await record_consent(world.manager, "2026.1")
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.rep_email))
@@ -278,7 +307,7 @@ async def test_first_sign_in_subsumes_the_other_gates(
     """Precedence, asserted rather than assumed. `SessionRecord.gate` is scalar, so
     an account behind first-sign-in must report exactly that even when a notice is
     also outstanding — completing it records both instruments anyway."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")
 
     response = await client.post("/api/v1/auth/session", json=credentials(world.initial_email))
@@ -366,7 +395,7 @@ async def test_signing_out_of_an_expired_session_still_succeeds(client):
     assert response.status_code == 204
 
 
-@pytest.mark.verifies("SEC-002")
+@pytest.mark.verifies("SEC-001")
 async def test_a_session_past_its_absolute_window_is_refused(
     guarded, world, credentials, monkeypatch
 ):
@@ -393,7 +422,32 @@ async def test_a_session_past_its_absolute_window_is_refused(
     assert (await guarded.http.get(guarded.PROBE)).status_code == 401
 
 
-@pytest.mark.verifies("SEC-002")
+@pytest.mark.verifies("SEC-001")
+async def test_idle_expiry_is_checked_even_if_the_store_key_still_exists(
+    guarded, world, monkeypatch
+):
+    """The record clock is authoritative even when a store TTL is late."""
+    from bluelab.platform import clock
+    from bluelab.platform.security import sessions
+
+    opened = clock.now()
+    raw = await guarded.store.create(
+        account_id=world.manager,
+        org_id=world.org,
+        team_id=world.manager,
+        role="manager",
+        opened_at=opened,
+    )
+    monkeypatch.setattr(
+        sessions,
+        "now",
+        lambda: opened + timedelta(seconds=app_settings().session_idle_seconds + 1),
+    )
+
+    assert await guarded.store.resolve(raw) is None
+
+
+@pytest.mark.verifies("SEC-001")
 async def test_a_resolved_session_never_outlives_the_nearer_clock(guarded, world, credentials):
     """The stored key's TTL is the idle window, not the absolute one.
 
@@ -546,6 +600,20 @@ async def test_a_successful_sign_in_clears_the_counters(throttled, world, creden
         assert (await throttled.post("/api/v1/auth/session", json=wrong)).status_code == 401
 
 
+@pytest.mark.verifies("SEC-004")
+async def test_password_reset_request_uses_the_prescribed_identifier_limit(client):
+    payload = {"email": "unknown-reset-subject@example.com"}
+
+    for _ in range(3):
+        assert (
+            await client.post("/api/v1/auth/password-reset-request", json=payload)
+        ).status_code == 202
+
+    refused = await client.post("/api/v1/auth/password-reset-request", json=payload)
+    assert refused.status_code == 429
+    assert int(refused.headers["retry-after"]) > 0
+
+
 # ── the gate REFUSAL, which is what makes the gate a gate ─────────────────────
 #
 # Everything above proves a limited session is admitted where it should be. These
@@ -591,7 +659,7 @@ async def test_a_consent_gate_refuses_a_guarded_route_too(
     """The gate that opens on an *established* session, not just at first sign-in.
     Publishing a notice must close the product surface to everyone who has not
     accepted it, on their next request."""
-    await legal_version("privacy_notice", "2026.1")
+    await legal_version("recording_consent_notice", "2026.1")
     await guarded.http.post("/api/v1/auth/session", json=credentials(world.rep_email))
 
     response = await guarded.http.get(guarded.PROBE)

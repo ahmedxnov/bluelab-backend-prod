@@ -16,6 +16,7 @@ Every policy reads the transaction-local GUCs that
 
     app.principal_kind   account | candidate | ops | system
     app.org_id  app.team_id  app.account_id  app.candidate_id
+    app.ops_account_id
     app.position_id      (route-back — see platform/db/scope.py)
     app.role
 
@@ -80,6 +81,7 @@ TEAM = "nullif(pg_catalog.current_setting('app.team_id', true), '')::uuid"
 ACCOUNT = "nullif(pg_catalog.current_setting('app.account_id', true), '')::uuid"
 CANDIDATE = "nullif(pg_catalog.current_setting('app.candidate_id', true), '')::uuid"
 POSITION = "nullif(pg_catalog.current_setting('app.position_id', true), '')::uuid"
+OPS_ACCOUNT = "nullif(pg_catalog.current_setting('app.ops_account_id', true), '')::uuid"
 ROLE = "nullif(pg_catalog.current_setting('app.role', true), '')"
 
 IS_ACCOUNT = f"{KIND} = 'account'"
@@ -367,7 +369,7 @@ create or replace function app_account_has_accepted(
     -- nothing else: no timestamps, no row, no other account. `p_account_id` is
     -- supplied by the caller from its own session record, never from a request.
     select case p_kind
-        when 'privacy_notice' then exists (
+        when 'recording_consent_notice' then exists (
             select 1 from public.consent_record c
             where c.account_id = p_account_id and c.notice_version = p_version
         )
@@ -379,6 +381,20 @@ create or replace function app_account_has_accepted(
         -- user. Fail closed: a typo in a kind must not open a compliance gate.
         else false
     end
+$$;
+
+create or replace function app_account_has_accepted_terms(
+    p_account_id uuid, p_terms_version text, p_privacy_version text
+) returns boolean language sql stable security definer set search_path = '' as $$
+    -- CMP-005: both versions must occur in the SAME acceptance row.
+    -- Expose only the current account's boolean, never its evidence rows.
+    select p_account_id = nullif(pg_catalog.current_setting('app.account_id', true), '')::uuid
+        and exists (
+            select 1 from public.terms_acceptance t
+            where t.account_id = p_account_id
+              and t.terms_version = p_terms_version
+              and t.privacy_version = p_privacy_version
+        )
 $$;
 
 create or replace function app_record_consent(p_id uuid, p_notice_version text)
@@ -424,9 +440,10 @@ returns void language plpgsql volatile security definer set search_path = '' as 
         -- hold junk, not because the junk was dangerous.
         if not exists (
             select 1 from public.legal_document_version v
-            where v.kind = 'privacy_notice' and v.version = p_notice_version
+            where v.kind = 'recording_consent_notice' and v.version = p_notice_version
+              and v.effective_at <= pg_catalog.now()
         ) then
-            raise exception 'app_record_consent: no published privacy_notice version %',
+            raise exception 'app_record_consent: no published recording_consent_notice version %',
                 p_notice_version using errcode = 'raise_exception';
         end if;
 
@@ -456,12 +473,8 @@ create or replace function app_record_terms_acceptance(
     -- a document the person never read, entered into the evidence trail as though
     -- they had. The caller passes what it displayed.
     --
-    -- Note the asymmetry this leaves: the unique key spans the pair, but
-    -- `app_account_has_accepted('terms_of_use', v)` matches on `terms_version`
-    -- alone. A row with the right terms and a stale privacy version therefore
-    -- satisfies the terms gate. Correct as far as the gate goes — the terms were
-    -- accepted — and the privacy notice has its own gate through
-    -- `privacy_notice`, so nothing is unguarded.
+    -- The gate matches this exact pair through app_account_has_accepted_terms;
+    -- recording consent never substitutes for privacy-notice acceptance.
     -- Raises on a scope naming no account, as `app_record_consent` does and for
     -- the same reason.
     declare
@@ -483,6 +496,7 @@ create or replace function app_record_terms_acceptance(
         if not exists (
             select 1 from public.legal_document_version v
             where v.kind = 'terms_of_use' and v.version = p_terms_version
+              and v.effective_at <= pg_catalog.now()
         ) then
             raise exception 'app_record_terms_acceptance: no published terms_of_use version %',
                 p_terms_version using errcode = 'raise_exception';
@@ -490,6 +504,7 @@ create or replace function app_record_terms_acceptance(
         if not exists (
             select 1 from public.legal_document_version v
             where v.kind = 'privacy_notice' and v.version = p_privacy_version
+              and v.effective_at <= pg_catalog.now()
         ) then
             raise exception 'app_record_terms_acceptance: no published privacy_notice version %',
                 p_privacy_version using errcode = 'raise_exception';
@@ -561,6 +576,7 @@ $$;
 revoke execute on function
     app_account_for_sign_in(text),
     app_account_has_accepted(uuid, text, text),
+    app_account_has_accepted_terms(uuid, text, text),
     app_record_consent(uuid, text),
     app_record_terms_acceptance(uuid, text, text),
     app_set_initial_credential(text),
@@ -883,7 +899,14 @@ def build(policy: TablePolicy) -> list[Policy]:
     # The system context reaches everything inside its org. Workers resolve scope
     # from the job row, so the work plane has no unscoped path (ADR-0005).
     system_predicate = _and(IS_SYSTEM, _org_match(policy)) if policy.org_scoped else IS_SYSTEM
-    for command in ("select", "insert", "update"):
+    system_commands: tuple[str, ...]
+    if policy.system_append_only:
+        system_commands = ("select", "insert")
+    elif policy.system_delete:
+        system_commands = ("select", "insert", "update", "delete")
+    else:
+        system_commands = ("select", "insert", "update")
+    for command in system_commands:
         out.append(
             Policy(
                 table=table,
@@ -891,11 +914,9 @@ def build(policy: TablePolicy) -> list[Policy]:
                 command=command,
                 using=None if command == "insert" else system_predicate,
                 check=system_predicate if command in ("insert", "update") else None,
-                # NO DELETE, for the same reason no principal has it: erasure is
-                # the only remover (data/00 §2, ADR-0033), and the retention
-                # sweeps are SECURITY DEFINER procedures rather than policy-bound
-                # queries — ADR-0031 enumerates both as escape hatches. A `for
-                # all` here would have been the one place the rule was skipped.
+                # DELETE remains absent unless the declaration names a concrete
+                # lifecycle that requires it. E-1 delivery material is the one
+                # current case; ordinary records remain removal-denied.
                 comment=(
                     "work plane and internal procedures, org-bounded"
                     if command == "select"
@@ -931,13 +952,12 @@ def build(policy: TablePolicy) -> list[Policy]:
                 comment="own org, read only",
             )
         )
-        out.append(
-            Policy(
+        out.extend(
+            _grants(
+                policy,
                 table=table,
-                name="ops_verbs",
-                command="all",
-                using=IS_OPS,
-                check=IS_OPS,
+                name="ops",
+                predicate=IS_OPS,
                 comment="provisioning verbs (ADR-0010)",
             )
         )
@@ -961,13 +981,12 @@ def build(policy: TablePolicy) -> list[Policy]:
                 comment="a manager sees its own team",
             )
         )
-        out.append(
-            Policy(
+        out.extend(
+            _grants(
+                policy,
                 table=table,
-                name="ops_verbs",
-                command="all",
-                using=IS_OPS,
-                check=IS_OPS,
+                name="ops",
+                predicate=IS_OPS,
                 comment="provision, deactivate, change team mapping",
             )
         )
@@ -1093,7 +1112,7 @@ def build(policy: TablePolicy) -> list[Policy]:
             out.append(_candidate_read(policy))
 
     elif cls is PolicyClass.P9_OPS:
-        if policy.system_write_only:
+        if policy.system_write_only or policy.system_append_only:
             out.append(
                 Policy(
                     table=table,

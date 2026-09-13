@@ -33,6 +33,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
+from uuid import UUID
 
 
 class Lane(StrEnum):
@@ -174,8 +175,18 @@ def validate_payload(lane: Lane, payload: dict[str, object]) -> None:
         raise ValueError(f"{lane.value}: payload missing {sorted(missing)}")
 
     for key, value in payload.items():
-        if isinstance(value, str) and len(value) > 128:
+        if not key.endswith("_id") or not isinstance(value, str):
             raise ValueError(
-                f"{lane.value}: payload key {key!r} looks like content, not an id — "
+                f"{lane.value}: payload key {key!r} is not an id — "
                 "payloads carry ids only (api/02 §2)"
+            )
+        try:
+            parsed = UUID(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"{lane.value}: payload key {key!r} is not a UUID"
+            ) from exc
+        if str(parsed) != value:
+            raise ValueError(
+                f"{lane.value}: payload key {key!r} is not a canonical UUID"
             )

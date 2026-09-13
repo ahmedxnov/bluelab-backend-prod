@@ -184,6 +184,13 @@ content** — every worker re-reads current truth from the store, which is what 
 Worker concurrency, queue depth alarms, and dead-letter handling are Phase 7/11 concerns; the contract
 here is payload + identity + failure surface.
 
+E-1 issuance atomically persists the credential or reset-token hash, `email_send`, its
+`email_delivery_secret` authenticated-encryption envelope, and the `{email_send_id}` job. The dispatcher
+resolves the account and envelope from that id, verifies the envelope's bound send id, org id, and purpose,
+and decrypts it only while rendering E-1. An absent or expired envelope is a terminal delivery failure. The
+dispatcher deletes the envelope after transport acceptance or terminal failure; the expiry sweep removes any
+stranded envelope. Plaintext never enters a job payload, dispatch ledger, log, metric, or trace.
+
 ## 3. Email contract — the closed five
 
 The dispatcher renders exactly five templates and **rejects any `kind` outside the inventory**

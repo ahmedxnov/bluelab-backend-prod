@@ -30,6 +30,11 @@ from __future__ import annotations
 from typing import Final
 
 from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+from bluelab.platform.errors import catalog
+from bluelab.platform.errors.handlers import render_problem
+from bluelab.platform.telemetry.correlation import current_request_id
 
 SAFE_METHODS: Final = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
@@ -38,7 +43,9 @@ _SAFE_FETCH_SITES: Final = frozenset({"same-origin", "same-site", "none"})
 cross-site request."""
 
 
-def is_cross_site_write(request: Request, *, allowed_origin: str | None) -> bool:
+def is_cross_site_write(
+    request: Request, *, allowed_origin: str | None, fail_closed: bool = True
+) -> bool:
     """True if this looks like a cross-site initiator on an unsafe method.
 
     Args:
@@ -67,7 +74,7 @@ def is_cross_site_write(request: Request, *, allowed_origin: str | None) -> bool
         return origin.rstrip("/") != allowed_origin.rstrip("/")
 
     # Neither header present on an unsafe, cookie-authenticated request.
-    return _has_session_cookie(request)
+    return fail_closed and _has_session_cookie(request)
 
 
 def _has_session_cookie(request: Request) -> bool:
@@ -78,3 +85,40 @@ def _has_session_cookie(request: Request) -> bool:
     signed internal seam) for no security gain.
     """
     return any(name.startswith("__Host-bluelab") for name in request.cookies)
+
+
+def _request_origin(request: Request) -> str | None:
+    """Build the target origin from the browser's actual request target."""
+    host = request.headers.get("host")
+    if not host:
+        return None
+    return f"{request.url.scheme}://{host}"
+
+
+class OriginCheckMiddleware:
+    """Reject cross-site initiation before any cookie-authenticated route runs."""
+
+    def __init__(self, app: ASGIApp, *, fail_closed: bool = True) -> None:
+        self.app = app
+        self._fail_closed = fail_closed
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        if is_cross_site_write(
+            request,
+            allowed_origin=_request_origin(request),
+            fail_closed=self._fail_closed,
+        ):
+            response = render_problem(
+                catalog.MALFORMED_REQUEST,
+                request_id=current_request_id(),
+                detail="Cross-site initiation is not accepted for this operation.",
+            )
+            await response(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)

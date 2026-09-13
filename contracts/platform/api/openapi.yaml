@@ -80,6 +80,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LegalDocuments" }
+        "503":
+          description: The current legal-document catalog is incomplete; gates remain closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
   # ───────────────────────────── Auth & session ─────────────────────────────
@@ -158,8 +163,8 @@ paths:
         consent checkbox (CMP-002), acknowledge Terms of Use and Privacy Notice (CMP-005) — the
         consent checkbox and terms acknowledgment are distinct controls; completing any subset alone
         does not grant access (AC-IDA-002: consent=false is a 422 and records nothing). Records the
-        consent and acceptance events with document versions. Idempotent replay after success is a
-        no-op 200 (00-contract-overview §6).
+        consent and acceptance events with document versions. A replay after the credential is set
+        answers 409 first-sign-in-not-pending.
       operationId: completeFirstSignIn
       requestBody:
         required: true
@@ -1292,7 +1297,9 @@ paths:
       summary: Assignment quick-pick cohorts
       description: >
         Computed recipient cohorts (FR-TRM-014): bottom half by rating, rating below 6.0, fewer
-        than 5 counted attempts this month, newest joiners.
+        than 5 counted attempts this month, newest joiners. All contain active reps from the
+        manager's team only. Bottom half reuses V-4 ranking and is empty below five rated reps;
+        newest joiners contains at most five accounts.
       operationId: getTeamCohorts
       parameters:
         - $ref: "#/components/parameters/MonthParam"
@@ -1876,11 +1883,16 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [data]
+                required: [data, known_recipient_domains]
                 properties:
                   data:
                     type: array
                     items: { $ref: "#/components/schemas/HrContact" }
+                  known_recipient_domains:
+                    type: array
+                    uniqueItems: true
+                    description: Canonical domains that previously received a shortlist from this manager; used only to mark new-domain confirmation warnings (SEC-011).
+                    items: { type: string, format: hostname }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "429": { $ref: "#/components/responses/RateLimited" }
     post:
@@ -1936,7 +1948,9 @@ paths:
       description: >
         The T-9 transaction (FR-HIR-014): one email (E-4) to recipients chosen from saved HR
         contacts plus free-entry addresses (validated for form), editable body, each included
-        candidate's concealment-safe PDF attached. Validation is atomic (gate F-3): every listed
+        candidate's concealment-safe PDF attached. The request carries explicit confirmation of the
+        normalized resolved recipients and acknowledgement of every domain absent from this manager's
+        prior shortlist history (SEC-011). Validation is atomic (gate F-3): every listed
         candidate_id must be approved and not yet in any sent shortlist, or the whole request
         answers 422 with per-id errors[] — nothing partial ever sends. Held-back candidates are
         simply omitted and stay approved for a later batch (AC-HIR-006). Inclusion freezes each
@@ -1951,7 +1965,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [candidate_ids, recipients, body]
+              required: [candidate_ids, recipients, body, recipients_confirmed, acknowledged_new_domains]
               properties:
                 candidate_ids:
                   type: array
@@ -1962,6 +1976,15 @@ paths:
                   minItems: 1
                   items: { type: string, format: email }
                 body: { type: string, minLength: 1 }
+                recipients_confirmed:
+                  type: boolean
+                  const: true
+                  description: Confirms that the manager was shown and accepted the exact normalized recipient list (SEC-011).
+                acknowledged_new_domains:
+                  type: array
+                  uniqueItems: true
+                  description: Must equal the server-derived set of recipient domains absent from this manager's prior shortlist history; each was visibly acknowledged (SEC-011).
+                  items: { type: string, format: hostname }
       responses:
         "202":
           description: Shortlist recorded; email queued; included decisions frozen.
@@ -1984,7 +2007,7 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "422":
-          description: "Problem types: validation-error (including ineligible candidate_ids — atomic, per-id errors[]); idempotency-key-required when the header is missing (gate F-3/F-5)."
+          description: "Problem types: validation-error (including ineligible candidate_ids — atomic, per-id errors[]); recipient-confirmation-required when the resolved list is unconfirmed or the acknowledged new-domain set differs; idempotency-key-required when the header is missing (gate F-3/F-5)."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ValidationProblem" }
@@ -2155,14 +2178,17 @@ paths:
     post:
       tags: [Ops]
       summary: Ops sign-in
-      description: Separate surface, separate accounts, separate cookie (ADR-0010, ADR-0037). No customer session can reach /ops/v1.
+      description: >
+        Separate surface, separate accounts, password plus RFC 6238 TOTP, and a separate cookie
+        (ADR-0010, ADR-0037, SEC-014). No customer session can reach /ops/v1. A failed password or
+        TOTP code answers the same invalid-credentials problem.
       operationId: opsSignIn
       security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/SignInRequest" }
+            schema: { $ref: "#/components/schemas/OpsSignInRequest" }
       responses:
         "200":
           description: Ops session established.
@@ -2174,10 +2200,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [ops_account_id, display_name]
+                required: [ops_account_id, display_name, session_expires_at]
                 properties:
                   ops_account_id: { type: string, format: uuid }
                   display_name: { type: string }
+                  session_expires_at: { type: string, format: date-time, description: Effective expiry at response time; the earlier of the current idle deadline and absolute deadline (SEC-001). }
         "401":
           description: "Problem type: invalid-credentials."
           content:
@@ -2201,7 +2228,7 @@ paths:
     post:
       tags: [Ops]
       summary: Provision a customer org
-      description: Creates the tenancy shell with its civil-calendar timezone (ops verb provision_org; audited with reason).
+      description: Creates the tenancy shell with its civil-calendar timezone and registered account-email domain (ops verb provision_org; audited with reason; SEC-040).
       operationId: opsCreateOrg
       security:
         - opsSessionCookie: []
@@ -2211,9 +2238,10 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name, reason]
+              required: [name, registered_domain, reason]
               properties:
                 name: { type: string, minLength: 1 }
+                registered_domain: { type: string, format: hostname, description: Canonical lower-case IDNA ASCII domain used for exact account-provisioning matches (SEC-040). }
                 timezone: { type: string, default: Africa/Cairo, description: IANA zone — the org's civil calendar (data 01 §2). }
                 reason: { type: string, minLength: 1 }
       responses:
@@ -2223,10 +2251,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [org_id, name, timezone]
+                required: [org_id, name, registered_domain, timezone]
                 properties:
                   org_id: { type: string, format: uuid }
                   name: { type: string }
+                  registered_domain: { type: string, format: hostname }
                   timezone: { type: string }
         "401": { $ref: "#/components/responses/OpsUnauthorized" }
         "422":
@@ -2890,7 +2919,7 @@ components:
       properties:
         version: { type: string }
         effective_at: { type: string, format: date-time }
-        url: { type: string, format: uri, description: The document text (counsel-owned). }
+        url: { type: string, format: uri-reference, description: The document text (counsel-owned). }
 
     SignInRequest:
       type: object
@@ -2899,9 +2928,17 @@ components:
         email: { type: string, format: email }
         password: { type: string }
 
+    OpsSignInRequest:
+      type: object
+      required: [email, password, totp_code]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+        totp_code: { type: string, pattern: "^[0-9]{6}$", description: Current six-digit RFC 6238 code (SEC-014). }
+
     SessionView:
       type: object
-      required: [account_id, display_name, email, role, org, pending_gates]
+      required: [account_id, display_name, email, role, org, pending_gates, session_expires_at]
       properties:
         account_id: { type: string, format: uuid }
         display_name: { type: string }
@@ -2921,6 +2958,10 @@ components:
           items:
             type: string
             enum: [first_sign_in, consent, terms]
+        session_expires_at:
+          type: string
+          format: date-time
+          description: Effective expiry at response time; the earlier of the current idle deadline and absolute deadline. Drives the proactive warning and never identifies the opaque session (SEC-001).
 
     FirstSignInRequest:
       type: object
@@ -3714,15 +3755,19 @@ components:
         month: { $ref: "#/components/schemas/Month" }
         bottom_half:
           type: array
+          description: Rated V-4 bottom half, ascending rating then account id; empty below five rated reps.
           items: { type: string, format: uuid }
         rating_below_6:
           type: array
+          description: Current-month ratings strictly below 6.0, ascending rating then account id.
           items: { type: string, format: uuid }
         fewer_than_5_attempts:
           type: array
+          description: Current-month counted attempts below five, including zero, ascending count then account id.
           items: { type: string, format: uuid }
         newest_joiners:
           type: array
+          description: Up to five active team reps, newest account creation first and account id ascending on ties.
           items: { type: string, format: uuid }
 
     AssignmentPut:
@@ -4058,7 +4103,7 @@ components:
 
     OpsAccountCreate:
       type: object
-      description: Roster entry (FR-IDA-001); rep entries name their manager (team, FR-IDA-009).
+      description: Roster entry (FR-IDA-001); rep entries name their manager (team, FR-IDA-009). The normalized email domain must exactly match the target org's registered_domain (SEC-040).
       required: [org_id, email, display_name, role, reason]
       properties:
         org_id: { type: string, format: uuid }
@@ -4145,7 +4190,7 @@ components:
         target_org_id: { type: [string, "null"], format: uuid }
         target_ref:
           type: object
-          description: Ids only, never content.
+          description: Structural references only — ids and the normalized provisioning domain required by AC-IDA-008; never customer content.
           additionalProperties: true
         reason: { type: string }
         occurred_at: { type: string, format: date-time }

@@ -286,7 +286,8 @@ async def test_ops_cannot_read_customer_content(as_principal, table):
     product without staff reading customer content.
     """
     from bluelab.platform.db.privileged import ops_scope
+    from bluelab.platform.ids import new_id
 
-    async with as_principal(ops_scope()) as session:
+    async with as_principal(ops_scope(ops_account_id=new_id())) as session:
         count = (await session.execute(text(f"select count(*) from {table}"))).scalar_one()
     assert count == 0, f"an ops principal read {table} — ADR-0010 §2 says it cannot"

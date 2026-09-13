@@ -43,7 +43,10 @@ async def base_org(engine) -> dict[str, UUID]:
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as s, s.begin():
         await s.execute(
-            text("insert into org (id, name, timezone) values (:id, 'Freeze', 'Africa/Cairo')"),
+            text(
+                "insert into org (id, name, registered_domain, timezone)"
+                " values (:id, 'Freeze', 'freeze.example', 'Africa/Cairo')"
+            ),
             {"id": ids["org"]},
         )
         await s.execute(

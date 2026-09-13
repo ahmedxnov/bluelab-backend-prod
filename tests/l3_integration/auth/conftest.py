@@ -39,8 +39,10 @@ from fastapi import APIRouter
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from tests.legal_fixtures import isolated_legal_catalog, legal_url
 from tests.support import required_url
 
+from bluelab.adapters.secrets import LocalAeadCipher
 from bluelab.api.deps import CurrentPrincipal
 from bluelab.platform.config import Settings
 from bluelab.platform.ids import new_id
@@ -96,6 +98,15 @@ def app_settings(**overrides: object) -> Settings:
     )
 
 
+DELIVERY_KEY = "ERERERERERERERERERERERERERERERERERERERERERE="  # pragma: allowlist secret
+
+
+@pytest.fixture
+def delivery_cipher() -> LocalAeadCipher:
+    """A real AEAD cipher over a test-only key; no provider call is mocked."""
+    return LocalAeadCipher.from_base64(DELIVERY_KEY)
+
+
 @dataclass(frozen=True, slots=True)
 class World:
     org: UUID
@@ -124,8 +135,14 @@ call — and re-deriving the same constant per test would spend most of this
 suite's runtime proving argon2 is slow."""
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def clean_legal_catalog(auth_engine):
+    async with isolated_legal_catalog(auth_engine):
+        yield
+
+
 @pytest_asyncio.fixture
-async def world(auth_engine) -> World:
+async def world(auth_engine, clean_legal_catalog) -> World:
     """Four accounts covering every branch sign-in can take.
 
     Seeded as the migration role: the world has to exist before any principal can
@@ -155,7 +172,10 @@ async def world(auth_engine) -> World:
     maker = async_sessionmaker(auth_engine, expire_on_commit=False)
     async with maker() as s, s.begin():
         await s.execute(
-            text("insert into org (id, name, timezone) values (:id, 'Auth Org', 'Africa/Cairo')"),
+            text(
+                "insert into org (id, name, registered_domain, timezone)"
+                " values (:id, 'Auth Org', 'example.com', 'Africa/Cairo')"
+            ),
             {"id": ids["org"]},
         )
 
@@ -191,7 +211,7 @@ async def world(auth_engine) -> World:
 
 
 @pytest_asyncio.fixture
-async def client(world) -> AsyncIterator[AsyncClient]:
+async def client(world, delivery_cipher) -> AsyncIterator[AsyncClient]:
     """The real app, over ASGI, with a fake Valkey.
 
     `create_app` rather than the module-level `app`: each test gets its own
@@ -213,6 +233,7 @@ async def client(world) -> AsyncIterator[AsyncClient]:
     app.dependency_overrides[get_settings] = lambda: settings
 
     app.state.valkey = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    app.state.delivery_secret_sealer = delivery_cipher
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="https://api.test") as http:
@@ -227,6 +248,11 @@ async def client(world) -> AsyncIterator[AsyncClient]:
 PROBE_PATH = "/api/v1/_probe"
 
 _probe_router = APIRouter()
+
+
+@_probe_router.get(PROBE_PATH + "/scope")
+async def _scope_probe(record: CurrentPrincipal) -> dict[str, str]:
+    return {"team_id": record.team_id, "role": record.role}
 
 
 @_probe_router.get(PROBE_PATH)
@@ -254,6 +280,7 @@ class Guarded:
     cannot produce — an unrecognised gate, in particular."""
 
     PROBE = PROBE_PATH
+    SCOPE = PROBE_PATH + "/scope"
 
 
 @pytest_asyncio.fixture
@@ -338,10 +365,16 @@ async def legal_version(auth_engine):
         async with maker() as s, s.begin():
             await s.execute(
                 text(
-                    "insert into legal_document_version (id, kind, version, effective_at)"
-                    " values (:id, :kind, :version, now() + make_interval(mins => :off))"
+                    "insert into legal_document_version (id, kind, version, url, effective_at)"
+                    " values (:id, :kind, :version, :url, now() + make_interval(mins => :off))"
                 ),
-                {"id": new_id(), "kind": kind, "version": version, "off": effective_offset},
+                {
+                    "id": new_id(),
+                    "kind": kind,
+                    "version": version,
+                    "url": legal_url(kind, version),
+                    "off": effective_offset,
+                },
             )
 
     yield _publish

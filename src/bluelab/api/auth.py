@@ -47,6 +47,7 @@ from fastapi import APIRouter, Depends, Response, status
 
 from bluelab.api.deps import (
     ClientAddress,
+    DeliverySecretSealerDep,
     GatedPrincipal,
     SessionStoreDep,
     ThrottleDep,
@@ -59,9 +60,12 @@ from bluelab.modules.identity.schemas import (
     AcceptancesRequest,
     FirstSignInRequest,
     Gate,
+    PasswordResetComplete,
+    PasswordResetRequest,
     SessionView,
     SignInRequest,
 )
+from bluelab.platform.clock import now
 from bluelab.platform.config import Settings, get_settings
 from bluelab.platform.db.scope import ScopeContext
 from bluelab.platform.db.session import scoped_transaction
@@ -74,7 +78,10 @@ from bluelab.platform.security.cookies import (
     session_spec,
     set_session_cookie,
 )
-from bluelab.platform.security.sessions import SessionStore
+from bluelab.platform.security.sessions import (
+    SessionRevokedDuringCreation,
+    SessionStore,
+)
 
 router = APIRouter(tags=["Auth"])
 
@@ -132,10 +139,17 @@ async def sign_in(
     # for an unknown email as readily as a known one.
     await service.guard_sign_in(throttle, settings, email=payload.email, source=source)
 
-    async with scoped_transaction(ScopeContext.anonymous()) as db:
-        authenticated = await service.authenticate(
-            db, email=payload.email, password=payload.password
-        )
+    try:
+        async with scoped_transaction(ScopeContext.anonymous()) as db:
+            authenticated = await service.authenticate(
+                db, email=payload.email, password=payload.password
+            )
+    except ProblemError as exc:
+        if exc.problem is catalog.INVALID_CREDENTIALS:
+            await service.record_sign_in_failure(
+                throttle, settings, email=payload.email, source=source
+            )
+        raise
 
     # The body is built BEFORE the session exists, and the ordering matters.
     #
@@ -153,27 +167,39 @@ async def sign_in(
         account_id=authenticated.account_id,
         role=service.role_of(authenticated.role),
     )
-    async with scoped_transaction(scope) as db:
-        account, org = await service.load_principal(db, authenticated.account_id)
-        gates = (authenticated.gate,) if authenticated.gate else await pending_gates(db, account)
-        view = service.view(account, org, gates)
-
-    raw = await store.create(
-        account_id=authenticated.account_id,
-        org_id=authenticated.org_id,
-        team_id=authenticated.team_id,
-        role=authenticated.role,
-        # `gates[0]`, not `authenticated.gate`. The latter is derived from
-        # `credential_state` alone, so it is `first_sign_in` or nothing — which
-        # meant a session opened by an account owing consent or terms was stored
-        # with NO gate, sailed past `current_principal`, and reached the whole
-        # product surface while the response body politely reported the gate the
-        # client was free to ignore. CMP-002/CMP-005 are not advisory.
-        #
-        # `pending_gates` returns them in precedence order and `SessionRecord.gate`
-        # holds one value, so the first is the one that limits the session.
-        gate=gates[0] if gates else None,
-    )
+    revocation_epoch = await store.revocation_epoch(authenticated.account_id)
+    try:
+        async with scoped_transaction(scope) as db:
+            account, org = await service.load_principal(db, authenticated.account_id)
+            if account.password_hash != authenticated.password_hash:
+                raise ProblemError(catalog.INVALID_CREDENTIALS)
+            gates = (
+                (authenticated.gate,)
+                if authenticated.gate
+                else await pending_gates(db, account)
+            )
+            opened_at = now()
+            view = service.view(
+                account,
+                org,
+                gates,
+                session_expires_at=store.new_session_expires_at(opened_at),
+            )
+            raw = await store.create(
+                account_id=authenticated.account_id,
+                org_id=authenticated.org_id,
+                team_id=authenticated.team_id,
+                role=authenticated.role,
+                # `gates[0]`, not `authenticated.gate`. The latter is derived from
+                # `credential_state` alone, so it is `first_sign_in` or nothing.
+                # `pending_gates` returns gates in precedence order and the stored
+                # compatibility snapshot holds one value, so the first limits it.
+                gate=gates[0] if gates else None,
+                opened_at=opened_at,
+                revocation_epoch=revocation_epoch,
+            )
+    except SessionRevokedDuringCreation:
+        raise ProblemError(catalog.SESSION_INVALID) from None
     set_session_cookie(response, _spec(settings), raw)
     # Last, once the sign-in has actually succeeded. The counters then measure
     # consecutive failures rather than traffic.
@@ -187,7 +213,7 @@ async def sign_in(
     response_model=SessionView,
     summary="Current session and pending gates",
 )
-async def get_session(record: GatedPrincipal) -> SessionView:
+async def get_session(record: GatedPrincipal, store: SessionStoreDep) -> SessionView:
     """The current principal, re-read from the database.
 
     Takes `GatedPrincipal`, not `CurrentPrincipal`: this is the endpoint a
@@ -197,8 +223,13 @@ async def get_session(record: GatedPrincipal) -> SessionView:
     """
     async with scoped_transaction(scope_of(record)) as db:
         account, org = await service.load_principal(db, UUID(record.account_id))
-        gates = (record.gate,) if record.gate else await pending_gates(db, account)
-        return service.view(account, org, gates)  # type: ignore[arg-type]
+        gates = await pending_gates(db, account)
+        return service.view(
+            account,
+            org,
+            gates,
+            session_expires_at=store.effective_expires_at(record),
+        )
 
 
 async def _rotate(store: SessionStore, raw: str, *, gate: Gate | None) -> str:
@@ -260,7 +291,12 @@ async def complete_first_sign_in(
         )
         account, org = await service.load_principal(db, UUID(record.account_id))
         gates = await pending_gates(db, account)
-        view = service.view(account, org, gates)
+        view = service.view(
+            account,
+            org,
+            gates,
+            session_expires_at=store.effective_expires_at(record),
+        )
 
     rotated = await _rotate(store, raw, gate=gates[0] if gates else None)
     set_session_cookie(response, _spec(settings), rotated)
@@ -298,7 +334,12 @@ async def record_acceptances(
         )
         account, org = await service.load_principal(db, UUID(record.account_id))
         gates = await pending_gates(db, account)
-        view = service.view(account, org, gates)
+        view = service.view(
+            account,
+            org,
+            gates,
+            session_expires_at=store.effective_expires_at(record),
+        )
 
     rotated = await _rotate(store, raw, gate=gates[0] if gates else None)
     set_session_cookie(response, _spec(settings), rotated)
@@ -331,3 +372,52 @@ async def sign_out(
     """
     await store.revoke(raw)
     clear_session_cookie(response, _spec(settings))
+
+
+@router.post(
+    "/auth/password-reset-request",
+    operation_id="requestPasswordReset",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_class=Response,
+    summary="Request a password reset link",
+)
+async def request_password_reset(
+    payload: PasswordResetRequest,
+    sealer: DeliverySecretSealerDep,
+    throttle: ThrottleDep,
+    source: ClientAddress,
+    settings: SettingsDep,
+) -> Response:
+    """Queue E-1 when the address is active and always return an empty 202."""
+    await service.guard_password_reset_request(
+        throttle, settings, email=payload.email, source=source
+    )
+    async with scoped_transaction(ScopeContext.anonymous()) as db:
+        await service.issue_password_reset(db, email=payload.email, sealer=sealer)
+    return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.post(
+    "/auth/password-reset",
+    operation_id="completePasswordReset",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    summary="Complete a password reset",
+)
+async def complete_password_reset(
+    payload: PasswordResetComplete,
+    store: SessionStoreDep,
+    throttle: ThrottleDep,
+    source: ClientAddress,
+    settings: SettingsDep,
+) -> Response:
+    """Consume the reset link, replace the hash, and end every live session."""
+    await service.guard_password_reset_completion(
+        throttle, settings, source=source
+    )
+    async with scoped_transaction(ScopeContext.anonymous()) as db:
+        account_id = await service.complete_password_reset(
+            db, token=payload.token, new_password=payload.new_password
+        )
+    await store.revoke_all(account_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

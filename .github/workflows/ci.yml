@@ -36,8 +36,15 @@ jobs:
           python-version: "3.12.11"
           cache: pip
           cache-dependency-path: requirements-dev.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.18.0"
+          cache: npm
+          cache-dependency-path: package-lock.json
       - name: Install the hash-locked toolchain
-        run: python -m pip install --require-hashes -r requirements-dev.lock
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.lock
+          npm ci
       - name: Bootstrap database roles
         env:
           PGPASSWORD: postgres
@@ -46,6 +53,11 @@ jobs:
           -v ON_ERROR_STOP=1 -v migration_role=bluelab -v app_role=bluelab_app
           -v role_password=bluelab -v database_name=bluelab_test
           -f sql/roles/bootstrap.sql
+      - name: Initialize the test database
+        run: |
+          python -m alembic upgrade head
+          python tools/generate_rls_policies.py
+          python tools/check_rls_drift.py --apply
       - name: Verify vendored boundaries
         run: |
           python tools/verify_contract_lock.py
@@ -58,6 +70,9 @@ jobs:
           lint-imports
           python tools/scan_tier_branches.py
           python tools/audit_cookie_attributes.py
+          python tools/check_telemetry_content_free.py
+          python tools/check_fixture_safety.py
+          git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline
       - name: Contract and requirement ratchets
         run: |
           python tools/check_conformance_diff.py

@@ -13,6 +13,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCK = REPO_ROOT / "contracts" / "runtime-bundle.lock.json"
 
 
+def _canonical_text_bytes(target: Path) -> bytes:
+    """Return platform-independent bytes for the vendored Python sources."""
+    return target.read_bytes().replace(b"\r\n", b"\n")
+
+
 def main() -> int:
     try:
         data = json.loads(LOCK.read_text(encoding="utf-8"))
@@ -21,7 +26,7 @@ def main() -> int:
         errors = []
         for relative, expected in sorted(data["files"].items()):
             target = REPO_ROOT / relative
-            actual = hashlib.sha256(target.read_bytes()).hexdigest()
+            actual = hashlib.sha256(_canonical_text_bytes(target)).hexdigest()
             if actual != expected:
                 errors.append(f"{relative}: expected {expected}, got {actual}")
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:

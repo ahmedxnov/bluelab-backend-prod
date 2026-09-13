@@ -317,24 +317,21 @@ path; the surface is unreachable from the customer edge.
 ### SEC-014: Operator and break-glass second factor `[Must]`
 Operator sign-in and any break-glass infrastructure access shall require a second authentication factor; every
 break-glass use shall be audited and shall page the team. Break-glass reuses the cloud provider's IAM MFA; the
-operations console needs a second-factor (TOTP) primitive the identity-primitives design did not provision —
-routed as [security/08 RB-7](../security/08-security-requirements-and-routebacks.security.md).
+operations console uses the per-operator RFC 6238 TOTP primitive defined by
+[stack ADR-0028](../stack/adr/0028-secrets-and-identity-primitives.md).
 **Verified by:** ops and break-glass access without a second factor is refused; a break-glass use produces an
 audit record and a page.
 
 ### SEC-040: Provisioning cannot become cross-tenant escalation `[Must]`
-Because operations provisions accounts by supplying `{email, role, org}` freely and the initial credential is
+Because operations provisions accounts by supplying `{email, role, org}` and the initial credential is
 mailed to that address ([FR-IDA-001](10-identity-and-access.spec.md)/[FR-IDA-003](10-identity-and-access.spec.md)),
 a single operator could mint a customer principal at an address they control and read that org's DC-3 through the
 customer surface — a legitimate-verb abuse the compromised-account controls do not cover. Provisioning shall
-therefore be constrained: the target email domain SHOULD match the org's registered domain, **or** provisioning
-into an org SHOULD require a second operator's approval — with the append-only ops audit as the backstop, not the
-sole control.
-**Verified by:** provisioning a mismatched-domain account is blocked or held for second-operator approval; every
+therefore require the normalized target email domain to exactly match the org's registered domain, with the
+append-only ops audit as the backstop rather than the sole control.
+**Verified by:** provisioning a mismatched-domain account is blocked; every
 provisioning action is audited with actor, target org, and reason; a review confirms provisioning alone cannot
 silently create a readable principal in an arbitrary org.
-*(The choice of domain-match vs second-operator approval is routed to the identity/operations flow —
-[security/08 RB-10](../security/08-security-requirements-and-routebacks.security.md).)*
 
 ### SEC-032: Consent and terms capture `[Must]`
 Recording consent and terms/privacy acceptance shall be captured as two distinct, never-pre-selected controls at

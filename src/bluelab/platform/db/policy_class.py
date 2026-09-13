@@ -141,6 +141,21 @@ class TablePolicy:
     in docs/open-items.md for confirmation.
     """
 
+    system_delete: bool = False
+    """The scoped system principal may delete rows for a specified lifecycle.
+
+    This remains false by default. Short-lived encrypted E-1 delivery material is
+    the narrow case: the worker must remove it after acceptance, terminal failure,
+    or expiry, while ordinary customer records remain delete-denied.
+    """
+
+    system_append_only: bool = False
+    """The system may select and insert, but may not update or delete rows.
+
+    ``ops_audit`` is the current case. Its rows are evidence, so append-only is
+    enforced by the generated database policy rather than by service convention.
+    """
+
     parent_table: str | None = None
     """The table this one inherits visibility from.
 
@@ -270,6 +285,8 @@ class TablePolicy:
             raise ValueError(f"{self.table}: team scope without org scope is not representable")
         if self.system_only and self.system_write_only:
             raise ValueError(f"{self.table}: system_only already implies no principal writes")
+        if self.system_delete and self.system_append_only:
+            raise ValueError(f"{self.table}: append-only storage cannot grant system delete")
         if (
             (self.candidate_read or self.candidate_insert)
             and self.candidate_link is None

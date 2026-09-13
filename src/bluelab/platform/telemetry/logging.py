@@ -36,6 +36,7 @@ SENSITIVE_KEYS: Final = frozenset(
         "reset_token",
         "session_id",
         "authorization",
+        "presigned_url",
         "cookie",
         "set_cookie",
         "x_agent_signature",
@@ -48,6 +49,19 @@ SENSITIVE_KEYS: Final = frozenset(
         "persona",
         "answer_key",
         "scenario",
+        "body",
+        "audio",
+        "recording",
+        "prompt",
+        "response",
+        "email",
+        "display_name",
+        "name",
+        "phone",
+        "address",
+        "product_fact",
+        "hidden_motive",
+        "objection",
     }
 )
 
@@ -67,7 +81,7 @@ def _redact_value(value: Any, depth: int) -> Any:
     content-free guarantee SEC-024 scans for (observability/01 §5).
     """
     if depth >= _MAX_REDACT_DEPTH:
-        return value
+        return REDACTED
     if isinstance(value, dict):
         return {
             key: REDACTED if str(key).lower() in SENSITIVE_KEYS else _redact_value(inner, depth + 1)

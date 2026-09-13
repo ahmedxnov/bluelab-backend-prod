@@ -54,7 +54,7 @@ When the manager re-assigns an already-assigned drill, the system shall update i
 The manager shall edit a published drill's assignment — recipients, due date, allowance — at any time, taking effect immediately and touching nothing of the drill's frozen content ([FR-DRL-015](12-drill-lifecycle.spec.md)).
 
 ### FR-TRM-014: Quick picks `[Could]`
-Recipient selection shall offer computed cohorts alongside individual reps: bottom half by rating, rating below 6.0, fewer than 5 counted attempts this month, and newest joiners.
+Recipient selection shall offer computed cohorts alongside individual reps. All cohorts contain only active reps on the manager's own team. For the selected org-local calendar month: **bottom half by rating** is the V-4-ranked, rated population only, where `rated_reps >= 5` and `rank_desc > ceil(rated_reps / 2.0)` (otherwise empty); **rating below 6.0** is every rep with a V-2 monthly rating strictly below 6.0; and **fewer than 5 counted attempts** is every rep with fewer than five V-1 attempts, including zero. **Newest joiners** is at most five active reps, ordered by `account.created_at DESC, account.id ASC`. The first three cohorts order by their qualifying metric then account id: bottom-half and below-6 ascending rating, fewer-than-5 ascending count; all ties break by account id ascending.
 
 ## NFR & compliance references
 

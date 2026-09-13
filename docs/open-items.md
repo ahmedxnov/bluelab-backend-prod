@@ -17,21 +17,17 @@ checking before first real use.
 
 ## CI defects
 
-### OI-21 · First GitHub Actions backend gate is red
-**Status:** verify · **Raised:** Phase 1 Tasks 16–19 runner verification, 2026-09-06 · **Evidence:** [run 33975393447](https://github.com/ahmedxnov/bluelab-backend-prod/actions/runs/33975393447)
+### OI-21 · Backend GitHub Actions gate
+**Status:** closed 2026-09-11 · **Raised:** Phase 1 Tasks 16–19 runner verification, 2026-09-06 · **Evidence:** [run 34564781218](https://github.com/ahmedxnov/bluelab-backend-prod/actions/runs/34564781218)
 
-The first `backend-ci` run on GitHub-hosted `ubuntu-24.04` for remote commit
-`0ee1ddbc3e7a7c40797d2b7c79eae7af256f559a` failed in **Verify vendored
-boundaries** (exit 1): `verify_contract_lock.py` found that the locked
-`api/openapi.yaml` hash (`2f9ad…55a4`) differs from the vendored file
-(`10d5d…127b2`). The subsequent static, ratchet, test, and container stages were
-skipped. This is a CI defect, not an environment waiver: repair the incompatible
-remote contract snapshot/lock pair and retain a green runner result before treating
-the backend gate as established.
+`backend-ci` completes on GitHub-hosted `ubuntu-24.04` for commit
+`d6355e0ce88f8b75737f7b04bd7405e5c8c3658c`. The gate verifies the locked
+contract and runtime snapshots, applies the Alembic lineage and generated SQL
+modules to a clean PostgreSQL 16 database, and passes the static, architecture,
+ratchet, and full test stages.
 
-The run also reports the GitHub Actions Node 20 deprecation warning for the pinned
-checkout and setup-python action revisions. Update those action revisions as a
-separate reviewed workflow maintenance change; it did not cause this failure.
+The green run emits a non-failing Node 20 deprecation warning for pinned action
+revisions. Action-runtime maintenance remains a separate reviewed workflow change.
 
 ---
 
@@ -156,40 +152,43 @@ documents will mislead the next reader.
 
 ## Deferred, with a named home
 
-### OI-18 · A gate opened mid-session is not enforced until the next sign-in
-**Status:** owner-ruled, no trigger exists yet → lands with the legal-document
-write path · **Raised:** the auth review pass
+### OI-18 · Current legal gates and account scope
+**Status:** resolved by the authorized identity gate patch, 2026-09-11.
 
-`pending_gates` is derived on read, but what *enforces* a gate is
-`SessionRecord.gate`, and that is written at sign-in. So publishing a new privacy
-notice or terms version limits an account **from its next sign-in**, not from its
-next request. `GET /auth/session` reports the gate honestly; nothing stops a
-client that ignores the answer.
+Request resolution now reloads active account state, team membership and legal
+gates from PostgreSQL before product access. This closes the existing-session
+bypass even when a legal version is inserted directly by a migration. The earlier
+publish-time fan-out proposal remains an optimization only; a future replacement
+must preserve next-request enforcement, including scheduled effective versions.
 
-**Owner ruling: re-gate live sessions at publish time**, rather than re-deriving
-on every authenticated request. Publishing a legal document happens a few times a
-year and authenticated requests happen constantly, so the work belongs on the rare
-event. The rejected alternative costs 2–3 extra queries on every call, forever, to
-close a window that opens almost never.
+Missing effective documents cannot clear onboarding or record partial evidence.
+Recording consent uses `recording_consent_notice`; terms acceptance requires the
+exact `terms_of_use`/`privacy_notice` pair. Future versions are ignored until
+effective, and equal effective timestamps have an immutable-id tie-break.
 
-**Not implemented, because there is nothing to hook.** `legal_document_version` is
-`P0_REFERENCE` and the contract exposes exactly one Legal operation —
-`GET /api/v1/legal-documents`. Publishing today is a migration or an ops
-statement, so there is no application code path where a re-gate could run. The
-mechanism lands *with* the write path when one is built; `SessionStore` already
-has the account index that a fan-out would walk.
+Deactivated/missing accounts and changed roles invalidate the current cookie.
+Team changes are reflected before product queries. A stored limited cookie whose
+gate was cleared on another device requires reauthentication rather than silently
+gaining privileges. The accepting device retains the existing rotation path.
 
-Until then the enforcement boundary is sign-in, and `gates.py`'s module docstring
-says so rather than implying the stronger guarantee it used to claim.
+Regression evidence: `tests/l3_integration/auth/test_current_identity_gates.py`.
+Apply the regenerated helpers through `tools/check_rls_drift.py --apply` during
+the normal database bootstrap/release step before running the patched application.
 
 ### OI-6 · `revoke_all` has a race
-**Status:** deferred → identity module · **Raised:** SEC-F7
+**Status:** closed 2026-09-11 · **Raised:** SEC-F7
 
-A session created between the `SMEMBERS` read and the `DELETE` survives
-deactivation. Closing it properly needs a per-account revocation epoch checked on
-every `resolve()`. Today's real guard is identity's sign-in check rejecting a
-deactivated account, so this lands *with* identity rather than before it
-(FR-IDA-010).
+Customer and operations sessions carry a per-account revocation generation.
+`revoke_all()` increments it before reading the session index; creation rejects a
+generation captured before revocation, and resolution checks it before and after
+sliding the idle window. Per-session tombstones prevent a stale concurrent
+resolver from restoring a signed-out or rotated cookie. Sign-in snapshots the
+generation before its current-account re-check, so a concurrent credential or
+scope revocation cannot issue a session against the newer generation.
+
+Regression evidence: `tests/l1_unit/test_session_revocation_race.py` and the
+session revocation journeys under `tests/l3_integration/auth/` and
+`tests/l3_integration/operations/`.
 
 ### OI-7 · Password policy is unenforced
 **Status:** deferred → identity module · **Raised:** SEC-F8
@@ -199,12 +198,13 @@ ASVS L1 wants ≥ 12 characters plus a breached-password check. `FR-IDA` owns th
 policy; the constants living unused in platform currently *imply* it is handled.
 
 ### OI-8 · No timeout on Valkey calls
-**Status:** deferred → needs a value · **Raised:** platform security pass
+**Status:** closed 2026-09-11 · **Raised:** platform security pass
 
-Postgres has `statement_timeout`; the coordination store has nothing (universal
-rule: timeouts on all I/O). Needs a config field, and the *value* matters because
-the single-live-call lease sits on the admission path where the participant is
-waiting.
+The coordination client applies the shared `DEPENDENCY_TIMEOUT_SECONDS` bound to
+both connection establishment and socket operations. The validated default is
+five seconds and deployment configuration may select a value from greater than
+zero through thirty seconds. Regression evidence:
+`tests/l1_unit/test_rate_limit_health.py`.
 
 ### OI-19 · `GET /me/library` re-counts the whole grid on every page
 **Status:** deferred → needs L6 · **Raised:** `/me/library` security review
@@ -254,28 +254,27 @@ Needs the L6 load suite (zero files today) with a realistically-sized org.
 ## Verify before first real use
 
 ### OI-9 · The Procrastinate table shape is unpinned
-**Status:** verify · **Source:** banked DoD item, [quality/08 §4](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/quality/08-definition-of-done-and-the-build-loop.quality.md), data **F-9**
+**Status:** closed 2026-09-11 · **Source:** banked DoD item, [quality/08 §4](https://github.com/ahmedxnov/bluelab-platform/blob/5222f8b715dd9dc20b073c57c1f2be1eb7ce6feb/quality/08-definition-of-done-and-the-build-loop.quality.md), data **F-9**
 
-`platform/queue/enqueue.py` writes `procrastinate_jobs` directly, because
-`defer()` manages its own connection and would break the single commit ADR-0023
-chose the queue for. The column names are **assumed**. The banked item's own
-framing holds: the transactional-enqueue *property* is the commitment and gets an
-L3 test; the *syntax* is schematic and gets a version pin.
+The hash-locked runtime pins Procrastinate 3.9.0. Transactional enqueue targets
+that version's installed table shape and commits with the domain write in the
+same PostgreSQL transaction. L3 rollback/commit tests exercise the property, and
+the containerized worker reaches a healthy database-backed heartbeat.
 
 ### OI-10 · Two library assumptions
-**Status:** verify
+**Status:** closed 2026-09-11
 
-- `valkey.asyncio` import path and pipeline semantics (buffered commands are
-  assumed synchronous until `execute()`).
-- `meter.create_gauge` needs `opentelemetry-api` ≥ 1.23. Nothing in
-  `pyproject.toml` is version-pinned yet.
+- The hash-locked runtime pins Valkey 6.1.1; session, throttle, replay, and
+  pipeline behavior runs against both fakeredis and a real Valkey 8 process.
+- The hash-locked runtime pins OpenTelemetry API/SDK 1.44.0 and instrumentation
+  0.65b0; telemetry imports and the content-free telemetry gate execute in CI.
 
 ### OI-11 · Nothing in `platform/` has been executed
-**Status:** verify
+**Status:** closed 2026-09-11
 
-No tests, no import check, no byte-compile — deliberately, per instruction. The
-cross-module wirings (`errors/handlers` → `telemetry/correlation`,
-`queue/context` → three others) are verified by reading only.
+The backend suite imports and executes the platform wiring. Ruff, mypy,
+import-linter, telemetry, cookie, tier-branch, fixture-safety, contract-lock,
+conformance, and requirement gates cover its static boundaries.
 
 ---
 

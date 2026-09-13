@@ -207,6 +207,25 @@ async def test_progress_shows_only_the_callers_own_attempts(client, sign_in, wor
     assert mine["rating"]["score"] == 7.3, "another rep's attempts leaked in"
 
 
+@pytest.mark.verifies("FR-TRP-002", "FR-TRM-002")
+async def test_rep_progress_and_manager_deep_dive_share_the_same_rating_pool(
+    client, sign_in, world
+):
+    """Both views expose identical values from the canonical counted pool."""
+    await sign_in(world.rep_email)
+    progress = (await client.get(PROGRESS)).json()
+
+    await sign_in(world.manager_email)
+    deep_dive = (await client.get(f"/api/v1/team/reps/{world.rep}")).json()
+
+    assert progress["rating"] == deep_dive["rating"]
+    progress_by_type = {card["call_type"]: card["rating"] for card in progress["call_type_cards"]}
+    deep_dive_by_type = {
+        row["call_type"]: row["rating"] for row in deep_dive["per_call_type"]
+    }
+    assert progress_by_type == deep_dive_by_type
+
+
 # ── GET /me/profile ───────────────────────────────────────────────────────────
 
 

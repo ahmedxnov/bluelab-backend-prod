@@ -58,7 +58,7 @@ The manager shall decide each completed candidate: **approve** or **reject**; an
 ### The handoff
 
 ### FR-HIR-014: Shortlist to HR `[Must]`
-The manager shall send approved candidates to HR as one email (E-4): recipients chosen from the manager's saved HR contacts plus free-entry addresses (validated for form), the saved list editable and persistent; per-candidate checkboxes to hold candidates back from this batch (held-back candidates stay approved for a later batch); an editable email body; and each included candidate's PDF (FR-HIR-012) attached. On send, included candidates count as forwarded and leave the approved-unsent count.
+The manager shall send approved candidates to HR as one email (E-4): recipients chosen from the manager's saved HR contacts plus free-entry addresses (validated for form), the saved list editable and persistent; per-candidate checkboxes to hold candidates back from this batch (held-back candidates stay approved for a later batch); an editable email body; and each included candidate's PDF (FR-HIR-012) attached. Before sending, the system shall present the normalized resolved recipient list for explicit confirmation and identify every recipient domain that has not previously received a shortlist from this manager; the manager shall acknowledge those new domains. On send, included candidates count as forwarded and leave the approved-unsent count ([SEC-011](02-security-requirements.spec.md)).
 
 ### FR-HIR-015: Close position `[Should]`
 When the manager closes a position, the system shall expire all its outstanding invite tokens, stop all further candidate entry, and keep the position and every report readable in a read-only archive.
@@ -119,6 +119,12 @@ Given an active position with one invited (unstarted) candidate
 When the manager closes the position
 Then the candidate's link no longer admits them
 And all existing reports remain readable in the archive.
+
+### AC-HIR-008: Shortlist recipients are confirmed
+Given a shortlist addressed to one previously used domain and one new domain
+When the manager has not confirmed the resolved recipients and acknowledged the new domain
+Then no shortlist row or email job is created
+And after explicit confirmation the send snapshots the exact resolved recipient list.
 
 ## Provenance
 

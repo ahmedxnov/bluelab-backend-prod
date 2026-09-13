@@ -30,4 +30,15 @@ EMAIL_SEND = REGISTRY.register(
     )
 )
 
-DECLARED = (EMAIL_SEND,)
+EMAIL_DELIVERY_SECRET = REGISTRY.register(
+    TablePolicy(
+        table="email_delivery_secret",
+        policy_class=PolicyClass.P9_OPS,
+        org_scoped=True,
+        team_scoped=False,
+        system_only=True,
+        system_delete=True,
+    )
+)
+
+DECLARED = (EMAIL_SEND, EMAIL_DELIVERY_SECRET)

@@ -25,7 +25,15 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, UniqueConstraint, text
+from sqlalchemy import (
+    CheckConstraint,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    LargeBinary,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from bluelab.platform.db.base import Base, Timestamped, UUIDPrimaryKey, enum_check
@@ -38,6 +46,7 @@ EMAIL_KINDS = (
     "E5_completion",
 )
 SEND_STATUSES = ("queued", "sent", "delivered", "bounced", "delayed", "failed")
+DELIVERY_SECRET_PURPOSES = ("initial_credential", "password_reset_token")
 
 
 class EmailSend(UUIDPrimaryKey, Timestamped, Base):
@@ -76,10 +85,38 @@ class EmailSend(UUIDPrimaryKey, Timestamped, Base):
         # At most one send per (recipient, event) — the dispatcher's idempotency
         # identity (api/02 §2).
         UniqueConstraint("kind", "dedupe_key"),
+        UniqueConstraint("id", "org_id"),
         Index(
             "idx_email_candidate",
             "candidate_id",
             text("created_at desc"),
             postgresql_where=text("candidate_id is not null"),
+        ),
+    )
+
+
+class EmailDeliverySecret(Timestamped, Base):
+    """Short-lived, encrypted material needed only to render E-1 once.
+
+    The queue and send ledger still carry ids only. Authenticated encryption binds
+    this envelope to the send, org, and purpose; workers delete it after provider
+    acceptance, terminal failure, or expiry.
+    """
+
+    __tablename__ = "email_delivery_secret"
+
+    email_send_id: Mapped[UUID] = mapped_column(primary_key=True)
+    org_id: Mapped[UUID] = mapped_column(ForeignKey("org.id"), nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+
+    __table_args__ = (
+        enum_check("purpose", DELIVERY_SECRET_PURPOSES),
+        CheckConstraint("expires_at > created_at", name="expires_after_creation"),
+        ForeignKeyConstraint(
+            ["email_send_id", "org_id"],
+            ["email_send.id", "email_send.org_id"],
+            ondelete="CASCADE",
         ),
     )

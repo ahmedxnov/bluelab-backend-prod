@@ -5,6 +5,17 @@ this file is the set's manifest and status line.
 
 **Amendments (in force, newest first):**
 
+- **A-5 · 2026-09-11 — security routebacks integrated.** Organization provisioning records a
+  registered email domain and account provisioning is domain-bound; operations sign-in uses TOTP;
+  session responses expose the effective expiry needed for a proactive warning; and HR shortlist
+  delivery requires confirmation of the resolved recipients and acknowledgement of new domains.
+  These clauses realize [SEC-001](02-security-requirements.spec.md),
+  [SEC-011](02-security-requirements.spec.md), [SEC-014](02-security-requirements.spec.md), and
+  [SEC-040](02-security-requirements.spec.md).
+- **A-4 · 2026-09-06 — Training quick-pick cohorts made deterministic.** At the
+  owner's direction, [21](21-training-manager.spec.md)'s `FR-TRM-014` now fixes
+  membership and ordering for each assignment quick-pick cohort. This resolves an
+  implementation gap without adding a capability or changing the v1 scope line.
 - **A-3 · 2026-07-25 — security requirements fed back.** The security & compliance design
   ([security/](../security/README.md)) produced testable, ID'd security requirements, added to the set as a new
   file, [02-security-requirements.spec.md](02-security-requirements.spec.md) (family `SEC-*`, `SEC-001…SEC-041`).

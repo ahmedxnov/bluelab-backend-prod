@@ -37,11 +37,10 @@ OPS_AUDIT = REGISTRY.register(
         policy_class=PolicyClass.P9_OPS,
         org_scoped=False,
         team_scoped=False,
-        principal_commands=("select", "insert"),
+        system_append_only=True,
     )
 )
-"""Append-only in behaviour. Nothing updates or deletes an audit row — an audit
-trail that can be edited is not one (SEC-040)."""
+"""Append-only by generated policy: ops reads; the system selects and inserts."""
 
 OPS_FAULT = REGISTRY.register(
     TablePolicy(

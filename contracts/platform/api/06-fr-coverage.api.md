@@ -16,7 +16,7 @@ obligation, stated so the gate can check nothing silently fell between contract 
 
 | FR | Realized by |
 |---|---|
-| FR-IDA-001 | `POST /ops/v1/accounts` (roster entry {email, role, org, manager}) |
+| FR-IDA-001 | `POST /ops/v1/orgs` records `registered_domain`; `POST /ops/v1/accounts` accepts roster entry {email, role, org, manager} only on an exact normalized domain match |
 | FR-IDA-002 | No self-registration endpoint exists on any surface — checkable property of the spec |
 | FR-IDA-003 | E-1 dispatch on provisioning (F-3 §3, dedupe per account) |
 | FR-IDA-004 | Gate-limited session ([00 §3](00-contract-overview.api.md)) + `POST /auth/first-sign-in` (all three actions, one call; `409 first-sign-in-required` on everything else) |
@@ -165,7 +165,7 @@ obligation, stated so the gate can check nothing silently fell between contract 
 | FR-HIR-011 | `GET /candidates/{id}/report` (identity, drills+time, unweighted-mean overall banded, internal note distinct, cross-drill takeaway, per-drill cards → reviews with weights — AC-HIR-003) |
 | FR-HIR-012 | `GET /candidates/{id}/report/pdf` (+ `POST .../render` retry) — concealment-safe single artifact (AC-HIR-004); embedded preview is SPA rendering of the same URL |
 | FR-HIR-013 | `PUT /candidates/{id}/decision` (approve/reject; pending by omission; `409 decision-frozen` after shortlist — AC-HIR-005; approve-and-next is SPA routing over review_queue) |
-| FR-HIR-014 | `GET/POST/DELETE /hr-contacts` + `POST /positions/{id}/shortlists` (T-9: recipients saved+free-entry, editable body, PDFs attached, holdback by exclusion — AC-HIR-006) |
+| FR-HIR-014 | `GET/POST/DELETE /hr-contacts` + `POST /positions/{id}/shortlists` (T-9: exact recipient confirmation and new-domain acknowledgement, saved+free-entry recipients, editable body, PDFs attached, holdback by exclusion — AC-HIR-006/008) |
 | FR-HIR-015 | `POST /positions/{id}/close` (T-8: tokens expired, entry stopped, read-only archive — AC-HIR-007) |
 | FR-HIR-016 | `PipelineCandidate.expired_incomplete` + `CandidateReport.incomplete` (completed drills graded and reported; decidable) |
 | FR-HIR-017 | E-5 on completion when toggled (F-3 §3) |

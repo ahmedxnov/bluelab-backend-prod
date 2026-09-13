@@ -13,11 +13,15 @@ because the alternative — a review checklist — rots.
 | `scan_tier_branches.py` | 9 | Any application branch keyed on the rollout tier (SEC-026, infra C-6) |
 | `audit_cookie_attributes.py` | 9 | Any cookie missing `__Host-` / `HttpOnly` / `Secure` / `SameSite=Strict` / `Path=/`, or carrying `Domain` (SEC-002) |
 | `check_job_payload_window.py` | (migration diffs) | A job payload change that breaks N/N+1 coexistence in either direction (pipeline/02 §3, gate F-2) |
-| `check_telemetry_content_free.py` | scheduled | Any telemetry field carrying content rather than an identifier or a timing (SEC-024, observability/01 §5) |
+| `check_telemetry_content_free.py` | 9 | Any telemetry field carrying content rather than an identifier or a timing (SEC-024, observability/01 §5) |
+| `check_fixture_safety.py` | 9 | Any non-reserved test identity or fixture data file without synthetic/consented/sandbox provenance (quality/07 §2) |
 
-The secret scan and the no-production-data check run in the same stage from
-off-the-shelf tooling; they are configured in `pyproject.toml` and the workflow,
-not reimplemented here.
+The secret scan runs in the same stage through `detect-secrets`. The workflow
+passes every Git-tracked file to the hook, including test-only probe routes.
+`.secrets.baseline` contains only reviewed local-development credentials,
+synthetic test vectors, and integrity digests; a new finding fails the build.
+The fixture-safety gate protects test identities and every data file admitted
+under `tests/fixtures/`.
 
 ## The ratchet, and why two of these carry a baseline
 

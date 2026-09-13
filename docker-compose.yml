@@ -44,6 +44,11 @@ services:
     # registry, placement. Deliberately volatile — nothing here survives its call
     # (ADR-0024, architecture/00 §3.4).
     ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   minio:
     image: minio/minio
@@ -55,12 +60,130 @@ services:
       MINIO_ROOT_PASSWORD: bluelabbluelab
     ports: ["9000:9000", "9001:9001"]
     volumes: ["miniodata:/data"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   mailpit:
     image: axllent/mailpit
     # C-14 local mail sink. Staging uses the SES sandbox; prod uses SES production
     # access (infra/00 §1).
     ports: ["1025:1025", "8025:8025"]
+
+  minio-init:
+    image: minio/mc
+    profiles: ["runtime"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mc alias set local http://minio:9000 bluelab bluelabbluelab
+        mc mb --ignore-existing local/bluelab-local
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+
+  migrate:
+    build:
+      context: .
+    image: bluelab-backend:local
+    profiles: ["runtime"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MIGRATION_DATABASE_URL: postgresql+psycopg://bluelab:bluelab@postgres:5432/bluelab # pragma: allowlist secret -- disposable local Compose credential
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        python -m alembic upgrade head
+        python tools/check_rls_drift.py --apply
+    healthcheck:
+      disable: true
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+
+  api:
+    build:
+      context: .
+    image: bluelab-backend:local
+    profiles: ["runtime"]
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      BLUELAB_PLANE: api
+      BLUELAB_ENV: local
+      DATABASE_URL: postgresql+asyncpg://bluelab_app:bluelab@postgres:5432/bluelab # pragma: allowlist secret -- disposable local Compose credential
+      VALKEY_URL: redis://valkey:6379/0
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      SMTP_URL: smtp://mailpit:1025
+    ports: ["8000:8000"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    stop_grace_period: 30s
+
+  worker:
+    build:
+      context: .
+    image: bluelab-backend:local
+    profiles: ["runtime"]
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      BLUELAB_PLANE: worker
+      BLUELAB_ENV: local
+      DATABASE_URL: postgresql+asyncpg://bluelab_app:bluelab@postgres:5432/bluelab # pragma: allowlist secret -- disposable local Compose credential
+      VALKEY_URL: redis://valkey:6379/0
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      SMTP_URL: smtp://mailpit:1025
+    command: ["python", "-m", "bluelab.entrypoints.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "bluelab.entrypoints.worker_health"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=1g,mode=1777"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    stop_grace_period: 30s
 
 volumes:
   pgdata:

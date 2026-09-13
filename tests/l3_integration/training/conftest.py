@@ -38,6 +38,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from tests.legal_fixtures import isolated_legal_catalog, seed_admitted_accounts
 from tests.support import required_url
 
 from bluelab.platform.config import Settings
@@ -110,8 +111,14 @@ async def training_engine():
     await engine.dispose()
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def clean_training_legal_catalog(training_engine):
+    async with isolated_legal_catalog(training_engine):
+        yield
+
+
 @pytest_asyncio.fixture
-async def world(training_engine) -> AsyncIterator[World]:
+async def world(training_engine, clean_training_legal_catalog) -> AsyncIterator[World]:
     """One team, two reps, three drills, a spread of graded attempts.
 
     Function-scoped and torn down explicitly. The isolation suite truncates every
@@ -150,7 +157,10 @@ async def world(training_engine) -> AsyncIterator[World]:
             return now - month_elapsed * (age_rank / 10)
 
         await s.execute(
-            text("insert into org (id, name, timezone) values (:id, 'Training Org', 'UTC')"),
+            text(
+                "insert into org (id, name, registered_domain, timezone)"
+                " values (:id, 'Training Org', 'training.example', 'UTC')"
+            ),
             {"id": ids["org"]},
         )
         # UTC deliberately: these tests assert on month and week boundaries, and a
@@ -413,6 +423,9 @@ async def world(training_engine) -> AsyncIterator[World]:
             {"rep": ids["rep"], "org": ids["org"], "at": now - timedelta(days=5)},
         )
 
+    async with maker() as s, s.begin():
+        await seed_admitted_accounts(s, ids["org"])
+
     yield World(
         org=ids["org"],
         manager=ids["manager"], manager_email=emails["manager"],
@@ -448,6 +461,8 @@ async def world(training_engine) -> AsyncIterator[World]:
             "delete from drill where org_id = :org",
             "delete from coach_feedback_item where org_id = :org",
             "delete from badge_award where org_id = :org",
+            "delete from consent_record where org_id = :org",
+            "delete from terms_acceptance where org_id = :org",
             "delete from account where org_id = :org",
             "delete from org where id = :org",
         ):
@@ -597,7 +612,7 @@ observe.
 
 
 @pytest_asyncio.fixture
-async def team_world(training_engine) -> AsyncIterator[TeamWorld]:
+async def team_world(training_engine, clean_training_legal_catalog) -> AsyncIterator[TeamWorld]:
     """One manager, five rated reps, and the three things counted nowhere."""
     org = new_id()
     manager = new_id()
@@ -618,7 +633,10 @@ async def team_world(training_engine) -> AsyncIterator[TeamWorld]:
     maker = async_sessionmaker(training_engine, expire_on_commit=False)
     async with maker() as s, s.begin():
         await s.execute(
-            text("insert into org (id, name, timezone) values (:id, 'Team Org', 'UTC')"),
+            text(
+                "insert into org (id, name, registered_domain, timezone)"
+                " values (:id, 'Team Org', 'team.example', 'UTC')"
+            ),
             {"id": org},
         )
         # UTC for the same reason `world` uses it: these assertions are about
@@ -872,6 +890,9 @@ async def team_world(training_engine) -> AsyncIterator[TeamWorld]:
         # for one. The exclusion is structural rather than a predicate, so there
         # is no row to write and none a regression could re-admit.
 
+    async with maker() as s, s.begin():
+        await seed_admitted_accounts(s, org)
+
     yield TeamWorld(
         org=org,
         manager=manager,
@@ -901,6 +922,8 @@ async def team_world(training_engine) -> AsyncIterator[TeamWorld]:
             "delete from scorecard where org_id = :org",
             "delete from attempt where org_id = :org",
             "delete from drill where org_id = :org",
+            "delete from consent_record where org_id = :org",
+            "delete from terms_acceptance where org_id = :org",
             "delete from account where org_id = :org",
             "delete from org where id = :org",
         ):
