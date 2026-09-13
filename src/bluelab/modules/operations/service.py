@@ -56,10 +56,10 @@ class AuthenticatedOps:
     password_hash: str
 
 
-async def guard_ops_request(
+async def guard_ops_sign_in(
     throttle: Throttle, settings: Settings, *, source: str
 ) -> None:
-    """Enforce the operations surface's fixed five-requests-per-minute limit."""
+    """Enforce the ops sign-in surface's fixed five-requests-per-minute limit."""
     retry = await throttle.hit(
         "ops_source",
         source,

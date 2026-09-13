@@ -346,3 +346,14 @@ async def test_ops_sign_out_revokes_the_server_side_session(ops_client, ops_worl
     assert signed_out.status_code == 204
     assert replayed.status_code == 401
     assert replayed.json()["type"].endswith("/ops-session-invalid")
+
+
+@pytest.mark.verifies("ADR-0028")
+async def test_authenticated_ops_requests_do_not_consume_the_sign_in_throttle(
+    ops_client, ops_world
+):
+    assert (await _sign_in(ops_client, ops_world)).status_code == 200
+
+    responses = [await ops_client.get("/ops/v1/audit") for _ in range(6)]
+
+    assert [response.status_code for response in responses] == [200] * 6

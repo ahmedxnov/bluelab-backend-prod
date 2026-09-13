@@ -16,7 +16,7 @@ from bluelab.api.deps import (
     OpsSessionStoreDep,
     OpsTotpUnsealerDep,
     TotpReplayStoreDep,
-    enforce_ops_rate,
+    enforce_ops_sign_in_rate,
     ops_session_cookie,
 )
 from bluelab.modules.identity import service as identity_service
@@ -51,7 +51,6 @@ PREFIX = "/ops/v1"
 router = APIRouter(
     prefix=PREFIX,
     tags=["Ops"],
-    dependencies=[Depends(enforce_ops_rate)],
 )
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -67,6 +66,7 @@ def _spec(settings: Settings) -> CookieSpec:
 
 @router.post(
     "/session",
+    dependencies=[Depends(enforce_ops_sign_in_rate)],
     operation_id="opsSignIn",
     response_model=OpsSignInView,
     status_code=status.HTTP_200_OK,

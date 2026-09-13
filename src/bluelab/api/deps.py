@@ -219,13 +219,13 @@ signature a statement of what it needs and lets a test override the address
 through `dependency_overrides` rather than by forging a transport."""
 
 
-async def enforce_ops_rate(
+async def enforce_ops_sign_in_rate(
     throttle: ThrottleDep,
     settings: Annotated[Settings, Depends(get_settings)],
     source: ClientAddress,
 ) -> None:
-    """Apply the five-per-minute source limit to every operations request."""
-    await operations_service.guard_ops_request(throttle, settings, source=source)
+    """Apply the five-per-minute source limit to ops sign-in only."""
+    await operations_service.guard_ops_sign_in(throttle, settings, source=source)
 
 
 def session_cookie(request: Request) -> str:
