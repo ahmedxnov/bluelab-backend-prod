@@ -54,7 +54,7 @@ async def _count_foreign(session, relation: str, org_id) -> int:
     ).scalar_one()
 
 
-@pytest.mark.verifies("CMP-004", "AC-IDA-006")
+@pytest.mark.verifies("CMP-004", "AC-IDA-006", "FR-IDA-008")
 @pytest.mark.parametrize("table", CUSTOMER_TABLES)
 async def test_no_customer_table_leaks_across_orgs(as_principal, manager, world, table):
     """Org B's manager sees no Org A row, on every customer-data table.

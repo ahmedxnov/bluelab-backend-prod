@@ -73,7 +73,7 @@ services:
     ports: ["1025:1025", "8025:8025"]
 
   minio-init:
-    image: minio/mc
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     profiles: ["runtime"]
     depends_on:
       minio:
@@ -81,8 +81,8 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
-        mc alias set local http://minio:9000 bluelab bluelabbluelab
-        mc mb --ignore-existing local/bluelab-local
+        mc --config-dir /tmp/.mc alias set local http://minio:9000 bluelab bluelabbluelab
+        mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-local
     read_only: true
     tmpfs: ["/tmp:size=16m,mode=1777"]
     cap_drop: ["ALL"]

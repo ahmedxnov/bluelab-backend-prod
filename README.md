@@ -139,6 +139,16 @@ and generate independent Base64-encoded 32-byte values for
 docker compose --profile runtime up -d --build --wait
 ```
 
+The connected browser journey uses a fresh synthetic operations identity without
+adding a test-only API route. With the runtime profile healthy, run:
+
+```bash
+python scripts/seed_phase2_journey.py
+```
+
+The command is restricted to `BLUELAB_ENV=local` and prints the generated
+operations email, password, and TOTP seed once for the browser-test environment.
+
 The runtime profile applies the single migration lineage first, creates the
 local object bucket, then starts the non-root API and worker from the same image.
 Both application containers use read-only root filesystems and a 30-second

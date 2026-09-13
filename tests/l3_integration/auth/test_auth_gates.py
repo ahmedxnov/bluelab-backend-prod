@@ -68,7 +68,7 @@ async def counts(engine, account) -> tuple[int, int]:
 # ── first sign-in: the happy path, so the refusals below mean something ───────
 
 
-@pytest.mark.verifies("FR-IDA-004")
+@pytest.mark.verifies("FR-IDA-004", "AC-IDA-001")
 async def test_completing_first_sign_in_clears_the_gate(client, world, credentials, legal_version):
     await legal_version("recording_consent_notice", "2026.1")
     await legal_version("terms_of_use", "2026.1")

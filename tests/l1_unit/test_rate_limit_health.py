@@ -13,6 +13,18 @@ from bluelab.platform.http.rate_limit import RateLimitMiddleware
 from bluelab.platform.security.throttle import Throttle
 
 
+@pytest.mark.verifies("SEC-002")
+def test_local_settings_keep_host_prefixed_session_cookies_secure() -> None:
+    settings = Settings(  # type: ignore[call-arg]
+        BLUELAB_ENV="local",
+        DATABASE_URL="postgresql+asyncpg://app:test@db/bluelab",  # pragma: allowlist secret
+        VALKEY_URL="redis://coordination:6379/0",
+        AGENT_HMAC_SECRET="unit-test-only",  # pragma: allowlist secret
+    )
+
+    assert settings.cookie_secure is True
+
+
 @pytest.mark.asyncio
 async def test_healthz_bypasses_rate_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
     downstream_called = False

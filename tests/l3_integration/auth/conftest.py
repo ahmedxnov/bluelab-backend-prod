@@ -70,20 +70,14 @@ so a test that gets a `401` cannot be blamed on the fixture."""
 
 
 def app_settings(**overrides: object) -> Settings:
-    """Settings for the app under test — **`staging`, not `local`**.
+    """Settings for the app under test.
 
     `overrides` takes env-var aliases (`AUTH_THROTTLE_IDENTIFIER_ATTEMPTS=2`), so a
     test can tighten one policy without a second construction path drifting from
     this one.
 
-    `cookie_secure` is the one environment-conditional value in the whole config,
-    and it is False on `local` because a dev server over plain http cannot set
-    `Secure`. But a `__Host-` cookie *requires* `Secure`, so `session_spec`
-    refuses that combination at construction — correctly, and this suite hit it.
-
-    Running as `staging` therefore exercises the production-shaped cookie, which
-    is the only shape worth asserting SEC-002 against. Testing the local variant
-    would be testing the one configuration the product never ships.
+    Running as `staging` exercises deployed origin and HSTS behavior. Session
+    cookies retain the same mandatory `__Host-` and `Secure` shape locally.
 
     Constructed directly rather than through `get_settings()`, which is
     `lru_cache`d: whichever test imported first would otherwise fix the settings
