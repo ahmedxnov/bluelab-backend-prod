@@ -336,6 +336,7 @@ async def test_a_second_team_in_the_same_org_reaches_neither_dashboard(
 # ── The gate and the parameter ────────────────────────────────────────────────
 
 
+@pytest.mark.verifies("FR-IDA-007")
 async def test_a_rep_cannot_reach_the_dashboard(client, sign_in, team_world):
     """The role gate from task 0, now on a real route.
 

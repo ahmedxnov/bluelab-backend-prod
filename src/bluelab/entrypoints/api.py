@@ -119,7 +119,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         window_seconds=resolved.request_limit_window_seconds,
     )
     app.add_middleware(OriginCheckMiddleware, fail_closed=resolved.is_production)
-    app.add_middleware(SecurityHeadersMiddleware, enable_hsts=resolved.cookie_secure)
+    app.add_middleware(
+        SecurityHeadersMiddleware,
+        enable_hsts=resolved.environment is not Environment.LOCAL,
+    )
 
     # Registered before the routers. Ordering does not change what catches, but it
     # makes plain that no route renders its own errors: every error on this

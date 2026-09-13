@@ -82,9 +82,7 @@ class SecurityHeadersMiddleware:
     Args:
         app: The ASGI app.
         enable_hsts: False on local http, where HSTS against `localhost` would
-            pin the browser to a scheme the dev server does not serve. Drive it
-            from `Settings.cookie_secure` so the two transport-conditional values
-            stay in agreement.
+            pin the browser to a scheme the dev server does not serve.
     """
 
     def __init__(self, app: ASGIApp, *, enable_hsts: bool) -> None:

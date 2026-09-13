@@ -140,10 +140,8 @@ def session_spec(name: str, *, max_age: int, secure: bool) -> CookieSpec:
     Args:
         name: `SESSION_COOKIE` or `OPS_SESSION_COOKIE`.
         max_age: Seconds, from the session policy.
-        secure: From `Settings.cookie_secure`. False only on local http, where
-            the browser rejects the `Secure` attribute — the sole
-            environment-conditional value, and it concerns transport, not
-            product behaviour.
+        secure: From `Settings.cookie_secure`; the value is true in every
+            environment because the `__Host-` prefix requires it.
 
     Raises:
         CookiePolicyViolation: If the resulting cookie would violate SEC-002.

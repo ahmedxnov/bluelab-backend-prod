@@ -190,12 +190,16 @@ Regression evidence: `tests/l1_unit/test_session_revocation_race.py` and the
 session revocation journeys under `tests/l3_integration/auth/` and
 `tests/l3_integration/operations/`.
 
-### OI-7 · Password policy is unenforced
-**Status:** deferred → identity module · **Raised:** SEC-F8
+### OI-7 · Password policy
+**Status:** closed 2026-09-13 · **Raised:** SEC-F8
 
-`MIN_LENGTH`/`MAX_LENGTH` sit in `platform/security/passwords.py` doing nothing.
-ASVS L1 wants ≥ 12 characters plus a breached-password check. `FR-IDA` owns the
-policy; the constants living unused in platform currently *imply* it is handled.
+Every password-setting request enforces the contract's 12–1024 character range
+before Argon2id hashing. The shared password service applies the same bounds to
+first-sign-in and reset completion, and the API schemas expose the matching
+validation contract.
+
+Regression evidence: `tests/l1_unit/test_passwords.py` and
+`tests/l3_integration/auth/test_auth_gates.py`.
 
 ### OI-8 · No timeout on Valkey calls
 **Status:** closed 2026-09-11 · **Raised:** platform security pass

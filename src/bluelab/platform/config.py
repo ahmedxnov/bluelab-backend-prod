@@ -328,14 +328,13 @@ class Settings(BaseSettings):
 
     @property
     def cookie_secure(self) -> bool:
-        """`Secure` is mandatory everywhere the scheme allows it (SEC-002).
+        """Session cookies always satisfy the `__Host-` prefix contract (SEC-002).
 
-        Local development runs over http://localhost, which browsers treat as a
-        secure context but which rejects the `Secure` attribute on some clients.
-        This is the *only* environment-conditional value in the settings, and it
-        is about the transport, not about product behaviour.
+        Loopback origins are potentially trustworthy browser contexts. Keeping
+        `Secure` in local development preserves the deployed cookie shape and,
+        critically, avoids constructing an invalid `__Host-` cookie.
         """
-        return self.environment is not Environment.LOCAL
+        return True
 
 
 @lru_cache(maxsize=1)
