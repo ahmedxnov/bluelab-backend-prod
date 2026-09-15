@@ -12,6 +12,7 @@ from bluelab.work.extract_facts import registration as extraction_registration
 from bluelab.work.generate_rubric import registration as rubric_registration
 from bluelab.work.generate_scenario import registration as scenario_registration
 from bluelab.work.grade_attempt import registration as grading_registration
+from bluelab.work.render_report import registration as report_registration
 
 
 def create_worker(settings: Settings | None = None) -> procrastinate.App:
@@ -23,6 +24,7 @@ def create_worker(settings: Settings | None = None) -> procrastinate.App:
         scenario_registration(resolved),
         rubric_registration(resolved),
         grading_registration(resolved),
+        report_registration(resolved),
     ]
     return build_worker_app(
         resolved.database_url.get_secret_value(),

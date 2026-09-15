@@ -74,6 +74,9 @@ grading_turnaround_ms = _meter.create_histogram(
 email_delivery = _meter.create_counter(
     "email.delivery", description="sent | delivered | bounced | delayed, by template kind"
 )
+report_render = _meter.create_counter(
+    "report.render", description="Concealment-safe report render outcome without report content"
+)
 dependency_result = _meter.create_counter(
     "dependency.result",
     description="Bounded external capability call outcome by dependency",
@@ -221,6 +224,13 @@ def record_email_delivery(*, kind: str, state: str) -> None:
     alert rule — this counter is what it ages against (gate FS-10).
     """
     email_delivery.add(1, _labels(email_kind=kind, state=state))
+
+
+def record_report_render(*, state: str) -> None:
+    """Emit only a closed render state; never candidate or report identifiers."""
+    if state not in {"available", "failed", "pending"}:
+        raise ValueError("report render state is outside the closed inventory")
+    report_render.add(1, _labels(state=state))
 
 
 def record_dependency(*, dependency: str, outcome: str, duration_ms: float) -> None:

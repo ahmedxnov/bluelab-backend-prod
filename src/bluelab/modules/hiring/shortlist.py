@@ -18,12 +18,13 @@ which is why V-11 can count them without a status to maintain.
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bluelab.adapters.email import validate_address
+from bluelab.notifications.templates import safe_template_text
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError
 from bluelab.platform.ids import new_id
@@ -118,7 +119,7 @@ async def send_shortlist(
     team_id: UUID,
     sent_by: UUID,
     candidate_ids: list[UUID],
-    recipients: list[dict[str, Any]],
+    recipients: list[str],
     email_body: str,
 ) -> UUID:
     """Run T-9's send half inside the caller's transaction.
@@ -138,6 +139,22 @@ async def send_shortlist(
     """
     import json
 
+    normalized = sorted({validate_address(value).lower() for value in recipients})
+    if not normalized:
+        raise ValueError("at least one recipient is required")
+    body = safe_template_text(email_body)
+    # The position lock serializes concurrent sends. Candidate locks make a
+    # decision racing this transaction see shortlist membership before it can
+    # update, so the T-9 freeze cannot be bypassed by stale UI state.
+    await session.execute(text("select id from position where id=:position for update"), {"position": position_id})
+    rows = (await session.execute(text("""select c.id,c.name,cr.pdf_object_key
+      from candidate c join candidate_report cr on cr.candidate_id=c.id
+     where c.position_id=:position and c.id=any(cast(:included as uuid[]))
+       and c.decision='approved' and cr.pdf_status='available'
+     for update"""), {"position": position_id, "included": [str(item) for item in candidate_ids]})).mappings().all()
+    if len(rows) != len(set(candidate_ids)):
+        raise ProblemError(catalog.SHORTLIST_EMPTY)
+    snapshot = [{"candidate_id": str(row["id"]), "name": str(row["name"]), "pdf_object_key": str(row["pdf_object_key"])} for row in rows]
     shortlist_id = new_id()
     await session.execute(
         _INSERT_SHORTLIST,
@@ -147,8 +164,8 @@ async def send_shortlist(
             "team_id": team_id,
             "position": position_id,
             "sent_by": sent_by,
-            "recipients": json.dumps(recipients),
-            "body": email_body,
+            "recipients": json.dumps(normalized),
+            "body": body,
         },
     )
 
@@ -163,10 +180,11 @@ async def send_shortlist(
     if added.rowcount == 0:  # type: ignore[attr-defined]  # SQLAlchemy types async execute() as Result[Any]; the UPDATE it returns is a CursorResult at runtime
         raise ProblemError(catalog.SHORTLIST_EMPTY)
 
+    email_send_id = new_id()
     await session.execute(
         _INSERT_EMAIL,
         {
-            "id": new_id(),
+            "id": email_send_id,
             "org_id": org_id,
             "dedupe_key": str(shortlist_id),
             "shortlist": shortlist_id,
@@ -175,10 +193,11 @@ async def send_shortlist(
     await enqueue(
         session,
         Lane.DISPATCH_EMAIL,
-        {"email_send_id": str(shortlist_id)},
+        {"email_send_id": str(email_send_id)},
         org_id=org_id,
         team_id=team_id,
     )
+    await session.execute(text("update shortlist set candidate_snapshot=cast(:snapshot as jsonb) where id=:id"), {"id": shortlist_id, "snapshot": json.dumps(snapshot)})
     return shortlist_id
 
 

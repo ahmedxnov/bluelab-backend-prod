@@ -65,6 +65,23 @@ def safe_text(value: str) -> str:
     return safe
 
 
+def safe_template_text(value: str) -> str:
+    """Keep manager-authored paragraph breaks while removing unsafe controls."""
+    normalized = unicodedata.normalize("NFKC", value).replace("\r\n", "\n").replace("\r", "\n")
+    safe = "".join(
+        character
+        for character in normalized
+        if character == "\n"
+        or (
+            character not in _FORMAT_CONTROLS
+            and not unicodedata.category(character).startswith("C")
+        )
+    ).strip()
+    if not safe:
+        raise ValueError("email template is empty after normalization")
+    return safe
+
+
 def render_e1(
     *,
     email_send_id: UUID,
@@ -123,3 +140,30 @@ def render_e1(
         html_body=html_body,
         message_id=f"<{email_send_id}@notifications.bluelab>",
     )
+
+
+def render_e2(*, email_send_id: UUID, recipient: str, recipient_name: str, org_name: str,
+              position_title: str, expires_at: str, token: str, template: str | None,
+              sender: str, public_app_url: str) -> OutboundEmail:
+    """Render the candidate invitation with a fragment-only bearer token."""
+    recipient, sender = validate_address(recipient), validate_address(sender)
+    name, org, position = safe_text(recipient_name), safe_text(org_name), safe_text(position_title)
+    url = f"{public_app_url.rstrip('/')}/assessment#token={quote(token, safe='')}"
+    body = safe_template_text(template) if template else "Please complete the assessment before the link expires."
+    guidance = "Use a desktop or laptop in a quiet room with headphones. Do not pause during a stage."
+    text_body = f"Hello {name},\n\n{body}\n\n{org} invited you to the {position} assessment.\nOpen: {url}\nExpires: {expires_at}\n\n{guidance}\n"
+    html_body = (f"<p>Hello {html.escape(name)},</p><p>{html.escape(body).replace(chr(10), '<br>')}</p>"
+                 f"<p>{html.escape(org)} invited you to the {html.escape(position)} assessment.</p>"
+                 f'<p><a href="{html.escape(url, quote=True)}">Open assessment</a></p>'
+                 f"<p>Expires: {html.escape(expires_at)}</p><p>{html.escape(guidance)}</p>")
+    return OutboundEmail(recipient=recipient, sender=sender, subject=f"BlueLab assessment: {position}",
+                         text_body=text_body, html_body=html_body,
+                         message_id=f"<{email_send_id}@notifications.bluelab>")
+
+
+def render_report_email(*, email_send_id: UUID, recipient: str, recipient_name: str, position_title: str, sender: str, body: str | None = None, attachments: tuple[tuple[str, bytes, str], ...], bcc_recipients: tuple[str, ...] = ()) -> OutboundEmail:
+    """Render E-3/E-4 with inert, normalized text and already-safe PDF bytes."""
+    recipient, sender = validate_address(recipient), validate_address(sender)
+    name, position = safe_text(recipient_name), safe_text(position_title)
+    message = safe_template_text(body) if body else "Your BlueLab candidate report is attached."
+    return OutboundEmail(recipient=recipient, sender=sender, subject=f"BlueLab report: {position}", text_body=f"Hello {name},\n\n{message}\n", html_body=f"<p>Hello {html.escape(name)},</p><p>{html.escape(message).replace(chr(10), '<br>')}</p>", message_id=f"<{email_send_id}@notifications.bluelab>", attachments=attachments, bcc_recipients=bcc_recipients)

@@ -46,7 +46,7 @@ EMAIL_KINDS = (
     "E5_completion",
 )
 SEND_STATUSES = ("queued", "sent", "delivered", "bounced", "delayed", "failed")
-DELIVERY_SECRET_PURPOSES = ("initial_credential", "password_reset_token")
+DELIVERY_SECRET_PURPOSES = ("initial_credential", "password_reset_token", "candidate_invite_token")
 
 
 class EmailSend(UUIDPrimaryKey, Timestamped, Base):

@@ -75,6 +75,35 @@ class Position(UUIDPrimaryKey, Mutable, Base):
     )
 
 
+class IdempotencyRecord(Base):
+    """Durable replay state for Phase 6 manager batch writes.
+
+    The key is intentionally scoped to its owning manager and endpoint.  The
+    body is represented only by its SHA-256 fingerprint; candidate data never
+    gets copied into a retry ledger.
+    """
+
+    __tablename__ = "idempotency_record"
+
+    org_id: Mapped[UUID] = mapped_column(ForeignKey("org.id"), primary_key=True)
+    owner_account_id: Mapped[UUID] = mapped_column(
+        ForeignKey("account.id"), primary_key=True
+    )
+    endpoint: Mapped[str] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(primary_key=True)
+    body_hash: Mapped[str] = mapped_column(nullable=False)
+    response_status: Mapped[int] = mapped_column(SMALLINT_TYPE, nullable=False)
+    response_body: Mapped[dict[str, Any]] = mapped_column(SNAPSHOT_TYPE, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
+
+    __table_args__ = (
+        CheckConstraint("response_status between 200 and 299", name="response_status_success"),
+        CheckConstraint("expires_at > created_at", name="expires_after_creation"),
+        Index("idx_idempotency_record_expiry", "expires_at"),
+    )
+
+
 class AssessmentStage(UUIDPrimaryKey, Base):
     """The ordered drill set candidates face (FR-HIR-004)."""
 
@@ -216,6 +245,8 @@ class Shortlist(UUIDPrimaryKey, Base):
     candidate's report must not."""
 
     email_body: Mapped[str] = mapped_column(nullable=False)
+    candidate_snapshot: Mapped[list[Any]] = mapped_column(SNAPSHOT_TYPE, nullable=False, server_default=text("'[]'::jsonb"))
+    """T-9 attachment identity snapshot; delivery never re-resolves a changed candidate."""
     sent_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
 
     __table_args__ = (

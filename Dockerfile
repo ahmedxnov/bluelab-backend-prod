@@ -31,6 +31,9 @@ WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY --from=build /ms-playwright /ms-playwright
 RUN .venv/bin/python -m playwright install-deps chromium \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends fonts-noto-core \
+    && rm -rf /var/lib/apt/lists/* \
     && adduser --disabled-password --gecos "" --home /app --uid 10001 appuser \
     && chown -R appuser:appuser /app /ms-playwright
 COPY --chown=appuser:appuser --from=build /app/src /app/src

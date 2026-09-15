@@ -36,6 +36,12 @@ class OutboundEmail:
     text_body: str
     html_body: str
     message_id: str
+    attachments: tuple[tuple[str, bytes, str], ...] = ()
+    bcc_recipients: tuple[str, ...] = ()
+
+    def all_recipients(self) -> tuple[str, ...]:
+        """Return the primary recipient and the private shortlist recipients."""
+        return (validate_address(self.recipient), *(validate_address(value) for value in self.bcc_recipients))
 
 
 class EmailTransport(Protocol):
@@ -76,6 +82,7 @@ class SmtpEmailTransport:
 
     async def send(self, message: OutboundEmail) -> str:
         recipient = validate_address(message.recipient)
+        recipients = message.all_recipients()
         sender = validate_address(message.sender)
 
         def blocking_send() -> str:
@@ -86,6 +93,9 @@ class SmtpEmailTransport:
             rendered["Message-ID"] = message.message_id
             rendered.set_content(message.text_body)
             rendered.add_alternative(message.html_body, subtype="html")
+            for filename, content, content_type in message.attachments:
+                maintype, subtype = content_type.split("/", 1)
+                rendered.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
 
             if self._tls:
                 client: smtplib.SMTP = smtplib.SMTP_SSL(
@@ -103,7 +113,7 @@ class SmtpEmailTransport:
             with client:
                 if self._username is not None:
                     client.login(self._username, self._password or "")
-                refused = client.send_message(rendered)
+                refused = client.send_message(rendered, to_addrs=recipients)
             if refused:
                 raise OSError("email transport refused a recipient")
             return message.message_id
@@ -135,23 +145,35 @@ class SesEmailTransport:
 
     async def send(self, message: OutboundEmail) -> str:
         recipient = validate_address(message.recipient)
+        recipients = message.all_recipients()
         sender = validate_address(message.sender)
 
-        async def operation() -> Any:
-            return await asyncio.to_thread(
-                self._client.send_email,
-                FromEmailAddress=sender,
-                Destination={"ToAddresses": [recipient]},
-                Content={
-                    "Simple": {
-                        "Subject": {"Data": message.subject, "Charset": "UTF-8"},
-                        "Body": {
-                            "Text": {"Data": message.text_body, "Charset": "UTF-8"},
-                            "Html": {"Data": message.html_body, "Charset": "UTF-8"},
-                        },
-                    }
-                },
-            )
+        if message.attachments:
+            rendered = EmailMessage()
+            rendered["From"] = sender; rendered["To"] = recipient; rendered["Subject"] = message.subject; rendered["Message-ID"] = message.message_id
+            rendered.set_content(message.text_body); rendered.add_alternative(message.html_body, subtype="html")
+            for filename, content, content_type in message.attachments:
+                maintype, subtype = content_type.split("/", 1)
+                rendered.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
+            raw_content = rendered.as_bytes()
+            async def operation() -> Any:
+                return await asyncio.to_thread(self._client.send_email, FromEmailAddress=sender, Destination={"ToAddresses": [recipient], "BccAddresses": list(recipients[1:])}, Content={"Raw": {"Data": raw_content}})
+        else:
+            async def operation() -> Any:
+                return await asyncio.to_thread(
+                    self._client.send_email,
+                    FromEmailAddress=sender,
+                    Destination={"ToAddresses": [recipient], "BccAddresses": list(recipients[1:])},
+                    Content={
+                        "Simple": {
+                            "Subject": {"Data": message.subject, "Charset": "UTF-8"},
+                            "Body": {
+                                "Text": {"Data": message.text_body, "Charset": "UTF-8"},
+                                "Html": {"Data": message.html_body, "Charset": "UTF-8"},
+                            },
+                        }
+                    },
+                )
 
         response = await call_dependency(
             DependencyName.EMAIL,
