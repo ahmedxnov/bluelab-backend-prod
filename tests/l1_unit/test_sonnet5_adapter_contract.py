@@ -56,13 +56,13 @@ class _CapturingMessages:
 def _settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "DATABASE_URL": (
-            "postgresql+asyncpg://test_user:test_password@db.example.invalid/test_db"
+            "postgresql+asyncpg://test_user:test_password@db.example.invalid/test_db"  # pragma: allowlist secret -- synthetic URL
         ),
         "VALKEY_URL": "redis://127.0.0.1:6379/0",
-        "AGENT_HMAC_SECRET": "test-secret-not-real",
+        "AGENT_HMAC_SECRET": "test-secret-not-real",  # pragma: allowlist secret -- synthetic test credential
         "VENDOR_FIXTURE_MODE": False,
-        "EVALUATOR_API_KEY": "test-evaluator-key",
-        "GENERATION_API_KEY": "test-generation-key",
+        "EVALUATOR_API_KEY": "test-evaluator-key",  # pragma: allowlist secret -- synthetic test credential
+        "GENERATION_API_KEY": "test-generation-key",  # pragma: allowlist secret -- synthetic test credential
         "DOCUMENT_INTELLIGENCE_ENDPOINT": "https://documents.invalid",
         "DOCUMENT_INTELLIGENCE_KEY": "test-document-key",
         "DEPENDENCY_MAX_ATTEMPTS": 1,
