@@ -105,6 +105,9 @@ DRILL_NOT_STARTABLE = _add("drill-not-startable", 409, "Drill is not available t
 NO_ACTIVE_CALL = _add("no-active-call", 404, "No active call")
 REVIEW_NOT_READY = _add("review-not-ready", 409, "Review not ready")
 CALL_CAPACITY = _add("call-capacity", 503, "All call slots are busy")
+WEBHOOK_SIGNATURE_INVALID = _add(
+    "webhook-signature-invalid", 401, "Webhook signature invalid"
+)
 
 # ── authoring and knowledge (ux/05 §3.5) ──────────────────────────────────────
 NOT_JOB_RELEVANT = _add("not-job-relevant", 422, "Not job-relevant")

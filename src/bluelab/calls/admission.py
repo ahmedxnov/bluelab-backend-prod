@@ -82,10 +82,17 @@ _CONSENT_ON_RECORD = text(
     """
     select exists (
         select 1 from consent_record
-        where (account_id = :who or candidate_id = :who)
+        where account_id is not distinct from :account
+          and candidate_id is not distinct from :candidate
           and notice_version = :current_version
     )
     """
+)
+
+_ALLOWANCE_STATE = text(
+    """select ar.attempts_used,a.attempts_allowed from assignment_recipient ar
+       join assignment a on a.id=ar.assignment_id
+      where a.drill_id=:drill and ar.rep_account_id=:rep"""
 )
 
 _CONSUME_ALLOWANCE = text(
@@ -119,8 +126,8 @@ _STAGE_STATE = text(
         from assessment_stage st
         where st.position_id = (select position_id from candidate where id = :candidate)
     )
-    select (select id from plan where not done order by ord limit 1) as next_stage_id,
-           (select ord from plan where not done order by ord limit 1) as next_stage_ord,
+    select (select id from plan where not done and interrupted < 2 order by ord limit 1) as next_stage_id,
+           (select ord from plan where not done and interrupted < 2 order by ord limit 1) as next_stage_ord,
            (select done from plan where id = :stage)                 as requested_done,
            (select interrupted from plan where id = :stage)          as requested_interrupted
     """
@@ -146,13 +153,12 @@ async def admit(
             `409 stage-not-next`, or `409 stage-consumed`. Each maps to a
             designed UX state (ux/05 §3.4) — none is a generic failure.
     """
-    subject = request.account_id or request.candidate_id
-    consented = (
-        await session.execute(
-            _CONSENT_ON_RECORD, {"who": subject, "current_version": consent_version}
-        )
-    ).scalar_one()
-    if not consented:
+    if not await has_current_consent(
+        session,
+        account_id=request.account_id,
+        candidate_id=request.candidate_id,
+        consent_version=consent_version,
+    ):
         # The universal backstop (AC-LIV-007): admission refuses even if a gate
         # upstream was somehow bypassed. Recording without consent is a CMP-002
         # breach, so it is checked at the last possible moment as well as the
@@ -171,7 +177,21 @@ async def admit(
             # Zero rows IS the refusal. Reading the counter and then writing it
             # would let two tabs both pass the read and both consume the last
             # attempt; the conditional update cannot.
-            raise ProblemError(catalog.ALLOWANCE_EXHAUSTED)
+            allowance = (
+                await session.execute(
+                    _ALLOWANCE_STATE,
+                    {"drill": request.drill_id, "rep": request.account_id},
+                )
+            ).one_or_none()
+            meta: dict[str, object] = (
+                {
+                    "attempts_used": int(allowance.attempts_used),
+                    "attempts_allowed": int(allowance.attempts_allowed),
+                }
+                if allowance is not None
+                else {}
+            )
+            raise ProblemError(catalog.ALLOWANCE_EXHAUSTED, meta=meta)
 
     if request.kind is ParticipantKind.CANDIDATE:
         restart = await _admit_candidate_stage(session, request)
@@ -184,7 +204,9 @@ async def admit(
             "org_id": request.org_id,
             "team_id": request.team_id,
             "drill_id": request.drill_id,
-            "rep": request.account_id if request.kind is not ParticipantKind.CANDIDATE else None,
+            "rep": request.account_id
+            if request.kind is not ParticipantKind.CANDIDATE
+            else None,
             "candidate": request.candidate_id,
             "stage": request.assessment_stage_id,
             "self_authored": request.self_authored,
@@ -194,7 +216,33 @@ async def admit(
     return AdmissionResult(attempt_id=attempt_id, restart=restart)
 
 
-async def _admit_candidate_stage(session: AsyncSession, request: AdmissionRequest) -> bool:
+async def has_current_consent(
+    session: AsyncSession,
+    *,
+    account_id: UUID | None,
+    candidate_id: UUID | None,
+    consent_version: str,
+) -> bool:
+    """Check exactly one subject against the current recording notice."""
+    if (account_id is None) == (candidate_id is None):
+        return False
+    return bool(
+        (
+            await session.execute(
+                _CONSENT_ON_RECORD,
+                {
+                    "account": account_id,
+                    "candidate": candidate_id,
+                    "current_version": consent_version,
+                },
+            )
+        ).scalar_one()
+    )
+
+
+async def _admit_candidate_stage(
+    session: AsyncSession, request: AdmissionRequest
+) -> bool:
     """Serialise per candidate, then check stage order and the restart allowance.
 
     The `for update` lock is what makes the rest safe: two tabs racing on the same
@@ -217,6 +265,12 @@ async def _admit_candidate_stage(session: AsyncSession, request: AdmissionReques
     if row.requested_done:
         raise ProblemError(catalog.STAGE_CONSUMED)
 
+    interrupted = int(row.requested_interrupted or 0)
+    if interrupted >= 2:
+        # A twice-interrupted stage is consumed even when it was the final stage
+        # and therefore no next_stage_id remains.
+        raise ProblemError(catalog.STAGE_CONSUMED)
+
     if row.next_stage_id != request.assessment_stage_id:
         # One sitting, in order (FR-CND-004). `meta` drives the UX: the plan
         # re-renders with the correct stage pulsed once (ux/05 §3.4).
@@ -224,11 +278,5 @@ async def _admit_candidate_stage(session: AsyncSession, request: AdmissionReques
             catalog.STAGE_NOT_NEXT, meta={"next_stage_ord": row.next_stage_ord}
         )
 
-    interrupted = int(row.requested_interrupted or 0)
-    if interrupted >= 2:
-        # 0 interrupted → fresh · 1 → the restart · 2 → consumed (data/02 §1 T-1).
-        # An unlimited restart would make a candidate's attempt count a matter of
-        # how many times they closed the tab.
-        raise ProblemError(catalog.STAGE_CONSUMED)
-
+    # 0 interrupted → fresh · 1 → the restart (data/02 §1 T-1).
     return interrupted == 1

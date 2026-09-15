@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bluelab.platform.ids import new_id
 from bluelab.platform.queue.catalog import Lane
 from bluelab.platform.queue.enqueue import enqueue
+from bluelab.platform.security.text import safe_plain_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,11 +85,17 @@ _LAST_OPEN_STAGE = text(
        and not exists (
            select 1 from assessment_stage st
            where st.position_id = (select position_id from candidate where id = :candidate)
-             and not exists (
-                 select 1 from attempt a
-                 where a.candidate_id = :candidate
-                   and a.assessment_stage_id = st.id
-                   and a.status in ('completed','grading_pending','graded')
+             and not (
+                 exists (
+                     select 1 from attempt a
+                     where a.candidate_id = :candidate
+                       and a.assessment_stage_id = st.id
+                       and a.status in ('completed','grading_pending','graded')
+                 )
+                 or (select count(*) from attempt a
+                     where a.candidate_id = :candidate
+                       and a.assessment_stage_id = st.id
+                       and a.status = 'interrupted') >= 2
              )
        )
     """
@@ -136,7 +143,9 @@ async def complete(
     #
     # `for update` also serialises two concurrent completions: the loser sees the
     # committed status and returns False instead of racing into the guard.
-    claimed = (await session.execute(_CLAIM_ATTEMPT, {"attempt": attempt_id})).scalar_one_or_none()
+    claimed = (
+        await session.execute(_CLAIM_ATTEMPT, {"attempt": attempt_id})
+    ).scalar_one_or_none()
     if claimed != "in_progress":
         return False
 
@@ -151,16 +160,20 @@ async def complete(
                 "attempt": attempt_id,
                 "org_id": org_id,
                 "team_id": team_id,
-                "rows": json.dumps([
-                    {
-                        "seq": r.seq,
-                        "speaker": r.speaker,
-                        "at_ms": r.at_ms,
-                        "text": r.text,
-                        "demeanor_label": r.demeanor_label,
-                    }
-                    for r in rows
-                ]),
+                "rows": json.dumps(
+                    [
+                        {
+                            "seq": r.seq,
+                            "speaker": r.speaker,
+                            "at_ms": r.at_ms,
+                            "text": safe_plain_text(r.text),
+                            "demeanor_label": safe_plain_text(r.demeanor_label)
+                            if r.demeanor_label
+                            else None,
+                        }
+                        for r in rows
+                    ]
+                ),
             },
         )
 
@@ -182,17 +195,9 @@ async def complete(
         return False
 
     if candidate_id is not None:
-        # The terminal marker, set only when no stage remains open (FR-CND-008).
-        # Setting it also terminates every token the candidate holds, because
-        # token termination is derived from this column (FR-IDA-013).
-        completed = await session.execute(_LAST_OPEN_STAGE, {"candidate": candidate_id})
-        if completed.rowcount:  # type: ignore[attr-defined]
-            # Rendering waits behind grading when necessary; its retry policy is
-            # the readiness gate for every report-bearing email.
-            await enqueue(session, Lane.RENDER_REPORT, {"candidate_id": str(candidate_id)}, org_id=org_id, team_id=team_id)
-            email_send_id = (await session.execute(_CREATE_E5, {"id": new_id(), "candidate": candidate_id})).scalar_one_or_none()
-            if email_send_id is not None:
-                await enqueue(session, Lane.DISPATCH_EMAIL, {"email_send_id": str(email_send_id)}, org_id=org_id, team_id=team_id)
+        await advance_candidate_if_closed(
+            session, candidate_id=candidate_id, org_id=org_id, team_id=team_id
+        )
 
     # The completion event. This insert commits with the transcript and the
     # status flip or not at all — which is what makes "a completed call is never
@@ -204,4 +209,32 @@ async def complete(
         org_id=org_id,
         team_id=team_id,
     )
+    return True
+
+
+async def advance_candidate_if_closed(
+    session: AsyncSession, *, candidate_id: UUID, org_id: UUID, team_id: UUID
+) -> bool:
+    """Close a mixed completed/consumed plan and schedule its terminal effects once."""
+    completed = await session.execute(_LAST_OPEN_STAGE, {"candidate": candidate_id})
+    if not completed.rowcount:  # type: ignore[attr-defined]
+        return False
+    await enqueue(
+        session,
+        Lane.RENDER_REPORT,
+        {"candidate_id": str(candidate_id)},
+        org_id=org_id,
+        team_id=team_id,
+    )
+    email_send_id = (
+        await session.execute(_CREATE_E5, {"id": new_id(), "candidate": candidate_id})
+    ).scalar_one_or_none()
+    if email_send_id is not None:
+        await enqueue(
+            session,
+            Lane.DISPATCH_EMAIL,
+            {"email_send_id": str(email_send_id)},
+            org_id=org_id,
+            team_id=team_id,
+        )
     return True

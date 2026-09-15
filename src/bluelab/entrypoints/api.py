@@ -35,6 +35,7 @@ from fastapi import FastAPI
 from valkey.asyncio import Valkey
 
 from bluelab.api import health, ops_v1, v1
+from bluelab.calls import internal_router, webhook_router
 from bluelab.platform.config import Environment, Settings, get_settings
 from bluelab.platform.db.engine import dispose_engine
 from bluelab.platform.errors import handlers
@@ -132,6 +133,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(v1.router)
     app.include_router(ops_v1.router)
+    app.include_router(internal_router.router)
+    app.include_router(webhook_router.router)
     return app
 
 

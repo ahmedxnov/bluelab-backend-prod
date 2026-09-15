@@ -29,6 +29,7 @@ from bluelab.api import (
     assessment,
     auth,
     authoring,
+    calls,
     hiring,
     knowledge,
     review,
@@ -53,6 +54,7 @@ router.include_router(identity_router.router)
 # the `409` naming its gate before any handler runs.
 router.include_router(training.router)
 router.include_router(review.router)
+router.include_router(calls.router)
 
 # The manager surface. Every route takes `ManagerPrincipal`, which composes on
 # `CurrentPrincipal` — so the gates still run first, and a role that is not

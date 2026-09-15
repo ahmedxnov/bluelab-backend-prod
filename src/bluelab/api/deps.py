@@ -536,3 +536,17 @@ async def current_candidate(
 
 CandidatePrincipal = Annotated[CandidateBinding, Depends(current_candidate)]
 # A candidate capability resolved to `(org, team, position, candidate)`.
+
+
+async def current_call_principal(
+    request: Request,
+    store: SessionStoreDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> SessionRecord | CandidateBinding:
+    """Resolve the Calls operation's explicit cookie-or-bearer security union."""
+    if authorization is not None:
+        return await current_candidate(authorization)
+    return await current_principal(await current_session(session_cookie(request), store))
+
+
+CallPrincipal = Annotated[SessionRecord | CandidateBinding, Depends(current_call_principal)]

@@ -99,6 +99,18 @@ playback_access = _meter.create_counter(
     "playback.access",
     description="Authorized review playback result by closed recording state",
 )
+call_admission_result = _meter.create_counter(
+    "call.admission_result", description="Content-free call admission and refused demand"
+)
+call_disposition = _meter.create_counter(
+    "call.disposition", description="Content-free terminal call outcomes"
+)
+call_lifecycle_seconds = _meter.create_histogram(
+    "call.lifecycle_seconds", unit="s", description="Established call duration"
+)
+call_recovery = _meter.create_counter(
+    "call.recovery", description="Lease and recording reconciliation outcomes"
+)
 model_version_observed = _meter.create_counter(
     "model.version", description="Provider-served model version observations"
 )
@@ -150,6 +162,28 @@ def record_http_request(*, route: str, status: int, duration_ms: float) -> None:
 def record_admission(*, duration_ms: float, outcome: str) -> None:
     """One T-1 admission transaction (placed, refused, or failed)."""
     admission_wall_ms.record(duration_ms, _labels(outcome=outcome))
+    call_admission_result.add(1, _labels(outcome=outcome))
+
+
+def record_call_disposition(
+    *, outcome: str, duration_seconds: float | None = None
+) -> None:
+    if outcome not in {"completed", "interrupted", "never_established"}:
+        raise ValueError("call disposition is outside the closed inventory")
+    call_disposition.add(1, _labels(outcome=outcome))
+    if duration_seconds is not None:
+        call_lifecycle_seconds.record(duration_seconds, _labels(outcome=outcome))
+
+
+def record_call_recovery(*, outcome: str) -> None:
+    if outcome not in {
+        "lease_expired",
+        "recording_available",
+        "recording_unavailable",
+        "orphan_cleaned",
+    }:
+        raise ValueError("call recovery outcome is outside the closed inventory")
+    call_recovery.add(1, _labels(outcome=outcome))
 
 
 def record_auth_signal(signal: AuthSignal) -> None:

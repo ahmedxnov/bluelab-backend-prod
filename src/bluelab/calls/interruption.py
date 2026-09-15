@@ -62,7 +62,9 @@ _REVERSE_ALLOWANCE = text(
     """
 )
 
-_DELETE_ATTEMPT = text("delete from attempt where id = :attempt and status = 'in_progress'")
+_DELETE_ATTEMPT = text(
+    "delete from attempt where id = :attempt and status = 'in_progress'"
+)
 
 
 async def interrupt(
@@ -72,6 +74,9 @@ async def interrupt(
     drill_id: UUID,
     rep_account_id: UUID | None,
     disposition: Disposition,
+    candidate_id: UUID | None = None,
+    org_id: UUID | None = None,
+    team_id: UUID | None = None,
 ) -> bool:
     """Run T-6 inside the caller's transaction.
 
@@ -86,7 +91,11 @@ async def interrupt(
         True if this call voided the attempt; False on a replay of an
         already-terminal one.
     """
-    statement = _DELETE_ATTEMPT if disposition is Disposition.NEVER_ESTABLISHED else _VOID_ATTEMPT
+    statement = (
+        _DELETE_ATTEMPT
+        if disposition is Disposition.NEVER_ESTABLISHED
+        else _VOID_ATTEMPT
+    )
     result = await session.execute(statement, {"attempt": attempt_id})
     if result.rowcount == 0:  # type: ignore[attr-defined]  # SQLAlchemy types async execute() as Result[Any]; the UPDATE it returns is a CursorResult at runtime
         return False
@@ -94,5 +103,16 @@ async def interrupt(
     if rep_account_id is not None:
         await session.execute(
             _REVERSE_ALLOWANCE, {"drill": drill_id, "rep": rep_account_id}
+        )
+    elif (
+        candidate_id is not None
+        and disposition is not Disposition.NEVER_ESTABLISHED
+        and org_id is not None
+        and team_id is not None
+    ):
+        from bluelab.calls.completion import advance_candidate_if_closed
+
+        await advance_candidate_if_closed(
+            session, candidate_id=candidate_id, org_id=org_id, team_id=team_id
         )
     return True

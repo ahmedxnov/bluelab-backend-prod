@@ -159,6 +159,9 @@ class Settings(BaseSettings):
     livekit_url: str | None = Field(default=None, alias="LIVEKIT_URL")
     livekit_api_key: SecretStr | None = Field(default=None, alias="LIVEKIT_API_KEY")
     livekit_api_secret: SecretStr | None = Field(default=None, alias="LIVEKIT_API_SECRET")
+    call_capacity: int = Field(default=10, ge=1, alias="CALL_CAPACITY")
+    call_capacity_retry_seconds: int = Field(default=15, ge=1, le=300, alias="CALL_CAPACITY_RETRY_SECONDS")
+    call_lease_seconds: int = Field(default=960, ge=930, le=1800, alias="CALL_LEASE_SECONDS")
 
     # ── C-6 / C-7 model capabilities (ADR-0018) ───────────────────────────────
     # Turn-path keys (C-2/C-3/C-4) are deliberately absent: they belong to the
