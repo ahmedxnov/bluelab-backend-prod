@@ -119,6 +119,26 @@ async def ops_world(operations_engine) -> AsyncIterator[OpsWorld]:
                 {"org_ids": org_ids},
             )
             await db.execute(
+                text("delete from ops_fault where org_id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
+                text("delete from attempt where org_id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
+                text("delete from drill_concealed where org_id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
+                text("delete from rubric_dimension where org_id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
+                text("delete from drill where org_id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
                 text("delete from account where org_id = any(:org_ids)"),
                 {"org_ids": org_ids},
             )

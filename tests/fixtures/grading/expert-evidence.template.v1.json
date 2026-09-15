@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "corpus_sha256": "79f054c9a7483f421b1d0bc673f722ba87581c7ae97c067690de493d3311b13d",
+  "preregistration": {
+    "registered_before_collection": true,
+    "bias_threshold": null,
+    "icc_ceiling_margin": null,
+    "subgroup_bias_threshold": null
+  },
+  "evidence_attestation": "PENDING_REAL_HUMAN_COLLECTION",
+  "randomized_call_order": true,
+  "independent_scoring": true,
+  "raters": [],
+  "ratings": []
+}

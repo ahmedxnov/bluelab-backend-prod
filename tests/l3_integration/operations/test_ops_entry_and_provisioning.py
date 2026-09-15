@@ -340,7 +340,7 @@ async def test_ops_sign_out_revokes_the_server_side_session(ops_client, ops_worl
 
     signed_out = await ops_client.delete("/ops/v1/session")
     replayed = await ops_client.get(
-        "/ops/v1/audit", cookies={OPS_COOKIE: raw}
+        "/ops/v1/audit", headers={"cookie": f"{OPS_COOKIE}={raw}"}
     )
 
     assert signed_out.status_code == 204

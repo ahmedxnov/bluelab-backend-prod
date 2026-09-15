@@ -27,11 +27,19 @@ from tests.support import required_url
 from bluelab.platform.ids import new_id
 
 MIGRATION_URL = required_url("TEST_MIGRATION_URL")
+APP_URL = required_url("TEST_DATABASE_URL")
 
 
 @pytest_asyncio.fixture(scope="session")
 async def engine():
     eng = create_async_engine(MIGRATION_URL)
+    yield eng
+    await eng.dispose()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def phase4_app_engine():
+    eng = create_async_engine(APP_URL)
     yield eng
     await eng.dispose()
 

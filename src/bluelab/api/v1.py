@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from bluelab.api import auth, team, training
+from bluelab.api import auth, authoring, knowledge, review, team, training
 from bluelab.modules.identity import router as identity_router
 
 PREFIX = "/api/v1"
@@ -43,9 +43,12 @@ router.include_router(identity_router.router)
 # `sessionCookie` requirement applies and a gate-limited session is refused with
 # the `409` naming its gate before any handler runs.
 router.include_router(training.router)
+router.include_router(review.router)
 
 # The manager surface. Every route takes `ManagerPrincipal`, which composes on
 # `CurrentPrincipal` — so the gates still run first, and a role that is not
 # `manager` is refused with the generic `404` rather than a `403` that would
 # disclose the route exists (ADR-0036 §2).
 router.include_router(team.router)
+router.include_router(knowledge.router)
+router.include_router(authoring.router)

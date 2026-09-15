@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "fixture": "corpus.v1.json",
+  "source_class": "synthetic",
+  "source_code": "SYN-PHASE4-CORPUS",
+  "production_data": false,
+  "authorization_reference": "BlueLab repository synthetic-evidence authorization v1.",
+  "permitted_use": [
+    "grading-validity-pilot",
+    "grading-drift-canary",
+    "automated-tests"
+  ],
+  "retention": "Retained with the versioned test corpus while the pilot is active.",
+  "withdrawal": "Remove the fixture and regenerate every corpus-bound evidence artifact before further use."
+}

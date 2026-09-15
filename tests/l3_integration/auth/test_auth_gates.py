@@ -143,7 +143,9 @@ async def test_the_session_id_rotates_on_completion(client, world, credentials, 
     after = cookie_of(completed)
 
     assert before != after, "the session id did not change"
-    replayed = await client.get("/api/v1/auth/session", cookies={SESSION_COOKIE: before})
+    replayed = await client.get(
+        "/api/v1/auth/session", headers={"cookie": f"{SESSION_COOKIE}={before}"}
+    )
     assert replayed.status_code == 401, "the pre-completion cookie still resolves"
 
 
@@ -162,7 +164,7 @@ async def test_acceptance_gate_clearance_rotates_the_session(
 
     assert before != after, "the gate-limited session id did not change"
     replayed = await client.get(
-        "/api/v1/auth/session", cookies={SESSION_COOKIE: before}
+        "/api/v1/auth/session", headers={"cookie": f"{SESSION_COOKIE}={before}"}
     )
     assert replayed.status_code == 401, "the pre-acceptance cookie still resolves"
 

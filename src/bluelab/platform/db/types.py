@@ -29,7 +29,7 @@ named error instead of a `KeyError` three frames deep.
 from __future__ import annotations
 
 from collections.abc import Callable
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Final
 
 from sqlalchemy import CheckConstraint, Numeric, SmallInteger
@@ -90,7 +90,10 @@ def quantize_score(value: Decimal | float) -> Decimal:
     Raises:
         ValueError: If the value falls outside 0…10.
     """
-    result = Decimal(str(value)).quantize(Decimal("0.1"))
+    # PostgreSQL ``numeric(p, s)`` rounds exact midpoint values away from zero.
+    # Scores are non-negative, so ROUND_HALF_UP keeps the application-derived
+    # value identical to the numeric(3,1) persistence boundary.
+    result = Decimal(str(value)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     if not (SCORE_MIN <= result <= SCORE_MAX):
         raise ValueError(f"score out of range: {result}")
     return result

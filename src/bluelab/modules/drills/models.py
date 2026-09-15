@@ -71,9 +71,15 @@ class Drill(UUIDPrimaryKey, Mutable, Base):
 
     __tablename__ = "drill"
 
-    org_id: Mapped[UUID] = mapped_column(ForeignKey("org.id"), nullable=False, index=True)
-    team_id: Mapped[UUID] = mapped_column(ForeignKey("account.id"), nullable=False, index=True)
-    author_account_id: Mapped[UUID] = mapped_column(ForeignKey("account.id"), nullable=False)
+    org_id: Mapped[UUID] = mapped_column(
+        ForeignKey("org.id"), nullable=False, index=True
+    )
+    team_id: Mapped[UUID] = mapped_column(
+        ForeignKey("account.id"), nullable=False, index=True
+    )
+    author_account_id: Mapped[UUID] = mapped_column(
+        ForeignKey("account.id"), nullable=False
+    )
 
     self_authored: Mapped[bool] = mapped_column(nullable=False)
     """A rep-private drill (FR-TRP-009): never assigned, never shared, excluded
@@ -83,11 +89,20 @@ class Drill(UUIDPrimaryKey, Mutable, Base):
     status: Mapped[str] = mapped_column(nullable=False, server_default=text("'draft'"))
     call_type: Mapped[str] = mapped_column(nullable=False)
     lead_type: Mapped[str | None] = mapped_column(nullable=True)
-    language: Mapped[str] = mapped_column(nullable=False, server_default=text("'ar-EG'"))
+    language: Mapped[str] = mapped_column(
+        nullable=False, server_default=text("'ar-EG'")
+    )
     label: Mapped[str | None] = mapped_column(nullable=True)
 
-    scenario: Mapped[dict[str, Any] | None] = mapped_column(SNAPSHOT_TYPE, nullable=True)
-    answer_key: Mapped[dict[str, Any] | None] = mapped_column(SNAPSHOT_TYPE, nullable=True)
+    scenario: Mapped[dict[str, Any] | None] = mapped_column(
+        SNAPSHOT_TYPE, nullable=True
+    )
+    draft_grounding: Mapped[dict[str, Any] | None] = mapped_column(
+        SNAPSHOT_TYPE, nullable=True
+    )
+    answer_key: Mapped[dict[str, Any] | None] = mapped_column(
+        SNAPSHOT_TYPE, nullable=True
+    )
     """Frozen at publish (ADR-0032, FR-DRL-014).
 
     Read whole, never queried into — hence no GIN index (data/00 §7). Each carries
@@ -101,14 +116,38 @@ class Drill(UUIDPrimaryKey, Mutable, Base):
     published_at: Mapped[datetime | None] = mapped_column(nullable=True)
     archived_at: Mapped[datetime | None] = mapped_column(nullable=True)
 
+    scenario_generation_status: Mapped[str] = mapped_column(
+        nullable=False, server_default=text("'none'")
+    )
+    scenario_generation_request_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    rubric_generation_status: Mapped[str] = mapped_column(
+        nullable=False, server_default=text("'none'")
+    )
+    rubric_generation_request_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    generation_error: Mapped[str | None] = mapped_column(nullable=True)
+
     __table_args__ = (
         enum_check("status", DRILL_STATUSES),
         enum_check("call_type", CALL_TYPES),
         enum_check("lead_type", LEAD_TYPES),
         CheckConstraint("language = 'ar-EG'", name="language_v1"),
+        CheckConstraint(
+            "scenario_generation_status in ('none','running','succeeded','failed')",
+            name="scenario_generation_status_valid",
+        ),
+        CheckConstraint(
+            "rubric_generation_status in ('none','running','succeeded','failed')",
+            name="rubric_generation_status_valid",
+        ),
+        CheckConstraint(
+            "not (scenario_generation_status = 'running' "
+            "and rubric_generation_status = 'running')",
+            name="single_generation_lane",
+        ),
         # Lead type exists on Discovery and only on Discovery (FR-DRL-001).
         CheckConstraint(
-            "(call_type = 'discovery') = (lead_type is not null)", name="lead_type_on_discovery"
+            "(call_type = 'discovery') = (lead_type is not null)",
+            name="lead_type_on_discovery",
         ),
         # Publish-gate backstop: a published drill cannot lack its frozen content.
         CheckConstraint(
@@ -249,7 +288,9 @@ class AssignmentRecipient(Base):
     attempts_used: Mapped[int] = mapped_column(
         SMALLINT_TYPE, nullable=False, server_default=text("0")
     )
-    granted_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
+    granted_at: Mapped[datetime] = mapped_column(
+        nullable=False, server_default=text("now()")
+    )
 
     __table_args__ = (
         CheckConstraint("attempts_used >= 0", name="attempts_used_non_negative"),

@@ -9,6 +9,12 @@ Two kinds, and the distinction is load-bearing (data/04 §6):
   **customer data**, created through ops provisioning and the product's own flows
   in whatever environment needs it. It is never a SQL fixture, in any environment.
 
+The vertical template lives in `config/verticals/egyptian-b2b-insurance.json`.
+After operations provisioning and manager authentication,
+`scripts/seed_phase3_vertical.py` submits that template through the knowledge
+create, draft, and publish endpoints. The helper is local-only and refuses a
+non-empty team catalog.
+
 The seed CLI is part of the timed bootstrap: `docker compose up` +
 `alembic upgrade head` + seed must complete in **under 10 minutes** from a clean
 clone, and that figure is a commit-gate stage (infra/00 §4, pipeline/02 §2 row 11).

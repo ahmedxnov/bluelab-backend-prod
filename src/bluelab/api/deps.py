@@ -33,6 +33,11 @@ from uuid import UUID
 from fastapi import Depends, Request
 from valkey.asyncio import Valkey
 
+from bluelab.adapters.generation_llm import (
+    GenerationProvider,
+    create_generation_provider,
+)
+from bluelab.adapters.object_store import ObjectStore, create_object_store
 from bluelab.adapters.secrets import (
     KmsSealer,
     KmsUnsealer,
@@ -52,6 +57,7 @@ from bluelab.platform.db.scope import Role, ScopeContext
 from bluelab.platform.db.session import scoped_transaction
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError, not_found
+from bluelab.platform.resilience import DependencyName, DependencyUnavailable
 from bluelab.platform.security.cookies import OPS_SESSION_COOKIE, SESSION_COOKIE
 from bluelab.platform.security.sessions import (
     OpsSessionRecord,
@@ -111,6 +117,44 @@ ValkeyDep = Annotated[Valkey, Depends(get_valkey)]
 SessionStoreDep = Annotated[SessionStore, Depends(get_session_store)]
 OpsSessionStoreDep = Annotated[OpsSessionStore, Depends(get_ops_session_store)]
 ThrottleDep = Annotated[Throttle, Depends(get_throttle)]
+
+
+def object_store_from_request(request: Request, settings: Settings) -> ObjectStore:
+    """Return the process-wide object-store adapter."""
+    configured: ObjectStore | None = getattr(request.app.state, "object_store", None)
+    if configured is None:
+        try:
+            configured = create_object_store(settings)
+        except DependencyUnavailable:
+            raise
+        except Exception as exc:
+            raise DependencyUnavailable(DependencyName.OBJECT_STORE) from exc
+        request.app.state.object_store = configured
+    return configured
+
+
+def get_object_store(
+    request: Request, settings: Annotated[Settings, Depends(get_settings)]
+) -> ObjectStore:
+    return object_store_from_request(request, settings)
+
+
+ObjectStoreDep = Annotated[ObjectStore, Depends(get_object_store)]
+
+
+def get_generation_provider(
+    request: Request, settings: Annotated[Settings, Depends(get_settings)]
+) -> GenerationProvider:
+    configured: GenerationProvider | None = getattr(
+        request.app.state, "generation_provider", None
+    )
+    if configured is None:
+        configured = create_generation_provider(settings)
+        request.app.state.generation_provider = configured
+    return configured
+
+
+GenerationProviderDep = Annotated[GenerationProvider, Depends(get_generation_provider)]
 
 
 def get_delivery_secret_sealer(
@@ -308,7 +352,9 @@ async def current_session(
             # not upgrade an older limited cookie in place (security/04 §3).
             await store.revoke(raw)
             raise ProblemError(catalog.SESSION_INVALID)
-        return replace(record, team_id=str(account.team_id), gate=gates[0] if gates else None)
+        return replace(
+            record, team_id=str(account.team_id), gate=gates[0] if gates else None
+        )
 
 
 GatedPrincipal = Annotated[SessionRecord, Depends(current_session)]

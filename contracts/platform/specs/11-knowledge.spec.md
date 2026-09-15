@@ -27,13 +27,13 @@ While replacement facts await publishing, the system shall present them for revi
 When the manager confirms publishing, the system shall atomically replace the document's live facts with the reviewed set; there shall be exactly one live fact set per document at any time.
 
 ### FR-KNW-007: Grounding rule `[Must]`
-A team's published facts shall be the sole source of product truth for that team's drills. At authoring, the current published facts ground scenario and rubric generation ([FR-DRL](12-drill-lifecycle.spec.md)); at publish the drill freezes the facts it was grounded in as its answer key ([FR-DRL-014](12-drill-lifecycle.spec.md)). Grading and the drill's product reference then use that frozen snapshot ([FR-SCR-002](14-scoring-and-review.spec.md), FR-KNW-009), so each drill is studied and graded against one unchanging truth. Updating a team's facts changes what newly published drills are built on, not existing drills. No team's consumers shall ever draw on another team's facts, and no other product-fact source shall exist.
+A team's published facts shall be the sole source of product truth for that team's drills. When scenario generation is requested, the system shall atomically capture the team's current published facts, their provenance, and the exact `(document_id, live_version)` set as the draft's grounding snapshot. Scenario generation and every subsequent rubric generation for that draft shall read that captured snapshot. Drill publish shall succeed only while the current `(document_id, live_version)` set exactly matches the captured set; otherwise it shall reject with `409 grounding-stale` and require scenario regeneration. A successful publish shall copy the captured snapshot into the drill as its answer key ([FR-DRL-014](12-drill-lifecycle.spec.md)). Grading and the drill's product reference then use that frozen answer key ([FR-SCR-002](14-scoring-and-review.spec.md), FR-KNW-009), so generation, study, and grading share one unchanging truth. Updating a team's facts changes the grounding captured by later generation requests, makes older generated drafts ineligible to publish, and leaves published drills unchanged. No team's consumers shall ever draw on another team's facts, and no other product-fact source shall exist.
 
 ### FR-KNW-008: Extraction failure `[Must]`
 When extraction of an uploaded file fails or yields no usable facts, the system shall show the manager a clear failure with retry, and nothing shall reach the review step; the document's live facts remain untouched.
 
 ### FR-KNW-009: Product reference `[Must]`
-The system shall render, as a read-only product reference reached from a drill's brief, the product facts that drill was grounded in (its frozen snapshot — so what a participant studies equals what grading checks), grouped by document, with a provenance line (source documents, publisher, fact count) and no edit affordance of any kind.
+The system shall render, as a read-only product reference reached from a drill's brief, the exact product facts that ground the drill: the captured grounding snapshot for an author's successfully generated draft and the frozen answer key for a published drill. A draft without both a generated scenario and captured grounding shall answer `409 generation-incomplete`. The reference shall group facts by document, show a provenance line (source documents, publisher names, fact count), and provide no edit affordance of any kind.
 
 ### FR-KNW-010: Draft status `[Should]`
 While a document has a replacement in progress (uploaded or manually entered but not published), the system shall mark that document's status as draft-in-progress to managers, while the live facts continue serving all consumers.
@@ -48,10 +48,11 @@ Tenancy scoping: [CMP-004](01-nfr-and-compliance.spec.md); team scoping of docum
 ## Acceptance Criteria
 
 ### AC-KNW-001: Upload, review, publish
-Given a document with live facts and a manager uploading a new rate card
+Given a document with live facts, a drill draft generated against them, and a manager uploading a new rate card
 When extraction completes, the manager reviews the diff (one value marked changed with the old value struck), and confirms publish
 Then the document's live facts are the new set
-And drills published after this are grounded in the new values, while already-published drills keep the facts they froze at publish.
+And a draft generated against an older version is refused at drill publish until its scenario is regenerated
+And drills published after regeneration are grounded in the new values, while already-published drills keep the facts they froze at publish.
 
 ### AC-KNW-002: Manual entry path
 Given a manager choosing manual entry

@@ -34,8 +34,8 @@ accident:
     or a worker. That is what makes the Path B variant a file swap.
 
     C-1   media transport          LiveKit server API      ADR-0014
-    C-6   evaluator model          Claude Sonnet 4.6       ADR-0018
-    C-7   generation model         Claude Sonnet 4.6       ADR-0018
+    C-6   evaluator model          Claude Sonnet 5         ADR-0018
+    C-7   generation model         Claude Sonnet 5         ADR-0018
     C-8   document extraction      Azure Document Intel.   ADR-0020
     C-9   PDF rendering            Chromium (Playwright)   ADR-0021
     C-11  object store             S3 API                  ADR-0025

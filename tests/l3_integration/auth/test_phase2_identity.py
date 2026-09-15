@@ -204,7 +204,7 @@ async def test_reset_is_single_use_changes_password_and_revokes_live_sessions(
     assert replay.json()["type"].endswith("/reset-token-invalid")
 
     stale = await client.get(
-        "/api/v1/auth/session", cookies={SESSION_COOKIE: old_cookie}
+        "/api/v1/auth/session", headers={"cookie": f"{SESSION_COOKIE}={old_cookie}"}
     )
     assert stale.status_code == 401
 

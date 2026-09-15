@@ -91,8 +91,9 @@ successful `200` whose status field reads as preparing, [FR-SCR-009](../specs/14
 | `type` slug | Status | When | Notes |
 |---|---|---|---|
 | `not-job-relevant` | 422 | Custom challenge/motive rejected by the job-relevance gate, **with the reason, before it influences generation** ([FR-DRL-007](../specs/12-drill-lifecycle.spec.md), [AC-DRL-004](../specs/12-drill-lifecycle.spec.md), [CMP-003](../specs/01-nfr-and-compliance.spec.md)) | `errors[]` per rejected entry with reason |
-| `generation-incomplete` | 409 | Publish without successfully generated scenario **and** rubric ([FR-DRL-006](../specs/12-drill-lifecycle.spec.md)) | |
+| `generation-incomplete` | 409 | Publish without successfully generated scenario **and** rubric, or draft-reference access before scenario and grounding exist ([FR-DRL-006](../specs/12-drill-lifecycle.spec.md), [FR-KNW-009](../specs/11-knowledge.spec.md)) | |
 | `generation-in-progress` | 409 | Generation requested while one is running for the same drill | Poll the drill |
+| `grounding-stale` | 409 | Drill publish while the current published-document version set differs from the draft's captured grounding ([FR-KNW-007](../specs/11-knowledge.spec.md), [FR-DRL-014](../specs/12-drill-lifecycle.spec.md)) | Regenerate the scenario; this also invalidates the rubric |
 | `weights-not-100` | 409 | Publish while rubric weights ≠ 100 ([FR-DRL-010](../specs/12-drill-lifecycle.spec.md)) | `meta.delta` — the "+3 to balance" number ([AC-DRL-003](../specs/12-drill-lifecycle.spec.md)) |
 | `drill-not-draft` | 409 | Input/rubric mutation or publish on a published/archived drill ([FR-DRL-015](../specs/12-drill-lifecycle.spec.md)) | |
 | `drill-not-archivable` | 409 | Archive on a draft, or by a non-manager | |

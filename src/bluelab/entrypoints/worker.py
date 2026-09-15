@@ -8,12 +8,22 @@ from bluelab.platform.config import Plane, Settings, get_settings
 from bluelab.platform.queue.runtime import build_worker_app
 from bluelab.platform.telemetry import logging
 from bluelab.work.dispatch_email import registration as email_registration
+from bluelab.work.extract_facts import registration as extraction_registration
+from bluelab.work.generate_rubric import registration as rubric_registration
+from bluelab.work.generate_scenario import registration as scenario_registration
+from bluelab.work.grade_attempt import registration as grading_registration
 
 
 def create_worker(settings: Settings | None = None) -> procrastinate.App:
     """Compose only the handlers implemented by this release."""
     resolved = settings or get_settings()
-    registrations = [email_registration(resolved)]
+    registrations = [
+        email_registration(resolved),
+        extraction_registration(resolved),
+        scenario_registration(resolved),
+        rubric_registration(resolved),
+        grading_registration(resolved),
+    ]
     return build_worker_app(
         resolved.database_url.get_secret_value(),
         registrations,

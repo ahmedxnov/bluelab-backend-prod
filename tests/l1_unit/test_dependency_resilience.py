@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
+from bluelab.api import deps
+from bluelab.platform.config import Settings
 from bluelab.platform.resilience import (
     CircuitBreaker,
     CircuitOpen,
@@ -115,3 +118,24 @@ async def test_open_circuit_fails_fast_without_calling_provider_again():
         )
 
     assert calls == 1
+
+
+@pytest.mark.verifies("FR-SCR-013", "ADR-0025")
+def test_object_store_construction_failure_has_dependency_semantics(monkeypatch):
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace())
+    )
+    monkeypatch.setattr(
+        deps,
+        "create_object_store",
+        lambda _settings: (_ for _ in ()).throw(RuntimeError("SDK setup failed")),
+    )
+
+    with pytest.raises(DependencyUnavailable) as caught:
+        deps.object_store_from_request(
+            request,  # type: ignore[arg-type]
+            Settings(VENDOR_FIXTURE_MODE=True),  # type: ignore[call-arg]
+        )
+
+    assert caught.value.dependency is DependencyName.OBJECT_STORE
+    assert not hasattr(request.app.state, "object_store")

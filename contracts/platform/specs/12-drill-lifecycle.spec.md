@@ -18,19 +18,19 @@ When an author creates a drill, the system shall accept its intent as: a call ty
 Every v1 drill's call language shall be Egyptian Arabic ([00 §3](00-overview.spec.md)); the authoring surface shall present the language as fixed.
 
 ### FR-DRL-004: Scenario generation `[Must]`
-When the author requests generation, the system shall produce the drill's scenario from its inputs: a buyer persona (a unique generated identity — name, role, company, meta facts), a situation context, and product references drawn exclusively from published facts ([FR-KNW-007](11-knowledge.spec.md)) — varying by call type (e.g. prior-proposal context for Post Proposal, account history for Renewal). The drill's identifying label everywhere shall derive from its generated persona (name · company); regeneration re-derives it.
+When the author requests generation, the system shall atomically capture the team's current published facts and version vector as the draft's grounding snapshot, mark a uniquely identified scenario request as running, and enqueue it. The system shall produce the drill's scenario from its inputs and that captured snapshot: a buyer persona (a unique generated identity — name, role, company, meta facts), a situation context, and product references drawn exclusively from the captured published facts ([FR-KNW-007](11-knowledge.spec.md)) — varying by call type (e.g. prior-proposal context for Post Proposal, account history for Renewal). The drill's identifying label everywhere shall derive from its generated persona (name · company); regeneration re-derives it.
 
 ### FR-DRL-005: Regenerate, never hand-edit `[Must]`
-While a scenario exists, the system shall present it read-only; when the author changes inputs and/or requests regeneration, the system shall replace the entire scenario with a newly generated one.
+While a scenario exists, the system shall present it read-only. Replacing authoring inputs shall invalidate the scenario, persona-derived label, rubric, captured grounding, and pending generation request. Requesting scenario generation shall invalidate the existing scenario, label, and rubric before work begins. A worker result shall apply only when its request identity still matches the draft's running scenario request; every stale result shall be a no-op.
 
 ### FR-DRL-006: Generation failure `[Must]`
-When scenario or rubric generation fails, the system shall show the author the failure with a retry, shall substitute no fallback content, and shall not allow a drill to publish without successfully generated scenario and rubric ([interview policy]).
+The drill shall persist one active generation lane with its kind (`scenario` or `rubric`), request identity, status (`none`, `running`, `succeeded`, or `failed`), and a safe failure reason only in the failed state. When scenario or rubric generation fails, the system shall show the author the failure with a retry, shall substitute no fallback content, and shall not allow a drill to publish without successfully generated scenario and rubric ([interview policy]).
 
 ### FR-DRL-007: Job-relevance at generation `[Must]`
 Per [CMP-003](01-nfr-and-compliance.spec.md), generated scenarios and rubrics shall concern job-relevant selling conduct only; when a custom challenge or motive entry is not job-relevant, the system shall reject it with the reason, before it can influence generation.
 
 ### FR-DRL-008: Rubric generation `[Must]`
-When the author proceeds to the rubric step, the system shall present an AI-generated per-drill rubric: dimensions each carrying a name, a weight, and a rationale, derived from the drill's call type, challenges, motives, and the team's published facts (so dimensions concerning product accuracy are grounded in real product truth).
+When the author proceeds to the rubric step, the system shall present an AI-generated per-drill rubric: dimensions each carrying a name, a weight, and a rationale, derived from the drill's call type, challenges, motives, generated scenario, and the same captured grounding snapshot used for scenario generation. A worker result shall replace the rubric only when its request identity still matches the draft's running rubric request; every stale result shall be a no-op.
 
 ### FR-DRL-009: Rubric tuning `[Must]`
 While the rubric is unpublished, the system shall let the author (a) adjust each dimension's weight and (b) delete a dimension, showing the live weight total for re-balancing. A dimension's name and rationale stay fixed as generated, and no dimension can be added or reshaped by hand — new or changed scored criteria come only from adjusting the drill's inputs and regenerating ([FR-DRL-011](12-drill-lifecycle.spec.md)), so every scored criterion stays within the job-relevance filter ([FR-DRL-007](12-drill-lifecycle.spec.md), [CMP-003](01-nfr-and-compliance.spec.md)).
@@ -39,7 +39,7 @@ While the rubric is unpublished, the system shall let the author (a) adjust each
 While the rubric's weights do not total exactly 100, the system shall block publishing and indicate the delta.
 
 ### FR-DRL-011: Rubric regeneration `[Must]`
-When the author requests rubric regeneration, the system shall require an explicit confirmation that manual edits will be discarded, then replace the entire rubric with a newly generated one.
+When the author requests rubric regeneration, the system shall require an explicit confirmation that manual edits will be discarded. The accepted request shall discard the entire existing rubric before work begins, and only the matching successful worker result shall install the complete generated replacement. Failure shall leave no prior rubric as fallback.
 
 ### FR-DRL-012: Test call `[Should]`
 When an author starts a test call on a draft or published drill, the system shall run a live call against the drill's buyer ([FR-LIV](13-live-call.spec.md)) that is never graded and leaves no attempt record, no review, and no trace in any statistic.
@@ -48,7 +48,7 @@ When an author starts a test call on a draft or published drill, the system shal
 While a drill is unpublished, the system shall let the author save it as a draft at any completeness and resume authoring later; drafts are visible only in authoring surfaces, marked as drafts, and cannot be taken by anyone.
 
 ### FR-DRL-014: Publish `[Must]`
-When the author publishes a drill (with a generated scenario and a rubric totaling 100), the system shall freeze — as the drill's immutable content — its scenario (with its persona-derived label), its rubric, its language, and a snapshot of the team's published facts it was grounded in (its answer key), and make it available per its mode's rules ([20](20-training-rep.spec.md)/[21](21-training-manager.spec.md)/[22](22-hiring-manager.spec.md)).
+When the author publishes a drill, the system shall require successfully generated scenario and rubric states, a rubric totaling 100, and an exact match between the draft grounding's `(document_id, live_version)` set and the team's current published-fact set. A mismatch shall answer `409 grounding-stale` and require scenario regeneration. In one transaction, a successful publish shall freeze — as the drill's immutable content — its scenario (with its persona-derived label), its rubric, its language, and the captured grounding copied as its answer key; clear the draft grounding; compute the server-owned canonical content hash; and make the drill available per its mode's rules ([20](20-training-rep.spec.md)/[21](21-training-manager.spec.md)/[22](22-hiring-manager.spec.md)).
 
 ### FR-DRL-015: Immutability `[Must]`
 While a drill is published, the system shall provide no path that alters its frozen content; changing its scenario, its rubric, or the facts it grades against means creating a new drill — including refreshing a drill to the team's updated facts, which is a republish, not an in-place edit.
@@ -66,13 +66,15 @@ Generation and rubric content: [CMP-003](01-nfr-and-compliance.spec.md). Scenari
 Given a manager creating a drill with call type Post Proposal, two challenges, one custom motive
 When they generate, review the scenario, tune one rubric weight to reach 100, and publish
 Then the drill is published with the tuned rubric
-And its scenario's product references match currently published facts.
+And its scenario, rubric, and answer key share the same captured grounding
+And the captured knowledge versions are still current at the publish transaction.
 
 ### AC-DRL-002: Regeneration replaces
-Given a generated scenario the author dislikes
+Given a generated scenario and tuned rubric the author dislikes
+And a duplicate response for its rubric request is delayed
 When they add a challenge and regenerate
 Then a wholly new scenario renders reflecting the added challenge
-And no element of the prior scenario survives.
+And the prior scenario, tuned rubric, grounding snapshot, and delayed response do not survive.
 
 ### AC-DRL-003: Publish blocked at 97
 Given a rubric whose weights total 97

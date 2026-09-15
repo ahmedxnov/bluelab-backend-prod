@@ -170,19 +170,30 @@ not theoretical: they are what guarantee no attempt is stranded `in_progress`.
 
 At-least-once queue, idempotent consumers, transactional enqueue (job insert commits with the domain
 write — [ADR-0023](../stack/adr/0023-job-queue-on-postgres.md)). Payloads carry **ids only, never
-content** — every worker re-reads current truth from the store, which is what makes retries safe.
+content** — every worker re-reads the request-bound captured or frozen truth from the store, which is
+what makes retries safe.
 
 | Job (queue name) | Payload | Idempotency identity | Enqueued by | Retry / failure surface |
 |---|---|---|---|---|
 | `grade_attempt` | `{attempt_id}` | `scorecard.attempt_id` unique — T-3 insert `ON CONFLICT DO NOTHING`; a second grade is a silent no-op ([FR-SCR-003](../specs/14-scoring-and-review.spec.md)) | T-2 (call completion — this insert **is** the completion event, [00-overview.arch §4](../architecture/00-overview.arch.md)) | Backoff retry; while failing: `attempt.status='grading_pending'` (participant reads *preparing*); on exhaustion insert `ops_fault(kind='grading_failure')` — never voids the call ([FR-SCR-009](../specs/14-scoring-and-review.spec.md)) |
-| `generate_scenario` | `{drill_id, request_id}` | `request_id` (one per author click); worker writes only if the drill's pending request matches — a stale generation never overwrites a newer one | `POST /drills/{id}/scenario-generation` | On failure: `drill.generation.scenario_status='failed'` + reason; **no fallback content**; publish stays blocked ([FR-DRL-006](../specs/12-drill-lifecycle.spec.md)). Retry = author re-request |
-| `generate_rubric` | `{drill_id, request_id}` | as above; replaces the rubric wholesale on success ([FR-DRL-011](../specs/12-drill-lifecycle.spec.md)) | `POST /drills/{id}/rubric-generation` | as `generate_scenario` |
+| `generate_scenario` | `{drill_id, request_id}` | `request_id` (one per author click); the worker reads the stored inputs and `draft_grounding`, then writes only while the drill still names that running scenario request | `POST /drills/{id}/scenario-generation` through T-5a | On exhaustion: matching request becomes `failed` with an author-safe reason; **no fallback content**; publish stays blocked ([FR-DRL-006](../specs/12-drill-lifecycle.spec.md)). Retry = author re-request |
+| `generate_rubric` | `{drill_id, request_id}` | as above; the worker reads the stored scenario, inputs, and the same `draft_grounding`, then atomically installs the complete validated rubric for the matching request | `POST /drills/{id}/rubric-generation` through T-5b | As `generate_scenario`; the accepted request discards the prior rubric, so failure exposes no fallback ([FR-DRL-011](../specs/12-drill-lifecycle.spec.md)) |
 | `extract_facts` | `{upload_id}` | `document_upload.status` transition `received→extracting→extracted|failed`; re-run of a terminal upload is a no-op | `POST /product-documents/{id}/uploads` | On failure/empty: `status='failed'` + reason; nothing reaches review; live facts untouched ([FR-KNW-008](../specs/11-knowledge.spec.md)). Retry = new upload POST re-running extraction on the same stored object |
 | `render_report` | `{candidate_id}` | `candidate_report` upsert keyed on `candidate_id`; PDF render conditional on `pdf_status in (none,failed)` | Candidate completion (T-2 candidate variant); `POST /candidates/{id}/report/render` (manager retry when `failed`) | On failure: `pdf_status='failed'`; report view still renders from data ([FR-HIR-011](../specs/22-hiring-manager.spec.md)); takeaway synthesis via C-6 inside this job ([00-overview.arch §3.3](../architecture/00-overview.arch.md)) |
 | `dispatch_email` | `{email_send_id}` | `email_send (kind, dedupe_key)` unique — at most one send per (recipient, event) ([04-deps §2.6](../architecture/04-dependencies-and-capabilities.arch.md)) | T-7 (invites), T-9 (shortlist), account provisioning, completion/decision events per policy | Backoff retry; terminal failure sets `email_send.status='failed'`; E-2 delivery state feeds the pipeline view ([FR-HIR-010](../specs/22-hiring-manager.spec.md)) |
 
 Worker concurrency, queue depth alarms, and dead-letter handling are Phase 7/11 concerns; the contract
 here is payload + identity + failure surface.
+
+The physical generation state is one lane on `drill`: `generation_kind`, `generation_status`,
+`generation_request_id`, and `generation_error` ([data 01 §4](../data/01-schema.data.md)). The HTTP
+`GenerationState` projection derives `scenario_status` from the physical status while the active kind is
+`scenario`, otherwise `succeeded` when `scenario` exists and `none` when it does not. It derives
+`rubric_status` the same way from active kind `rubric` and the existence of rubric rows. `error` carries the
+bounded safe reason only for the active failed kind and is `null` otherwise. Request identity remains
+internal. Replacing inputs resets the lane and invalidates both outputs; requesting scenario generation
+invalidates both outputs; requesting rubric generation invalidates the rubric. Every displaced worker sees
+a request mismatch and completes as a no-op.
 
 E-1 issuance atomically persists the credential or reset-token hash, `email_send`, its
 `email_delivery_secret` authenticated-encryption envelope, and the `{email_send_id}` job. The dispatcher

@@ -1,0 +1,47 @@
+{
+  "v": 1,
+  "vertical": "egyptian-b2b-insurance",
+  "product": "Group Medical",
+  "documents": [
+    {
+      "title": "Plan tiers & rates",
+      "facts": [
+        {
+          "label": "Core annual rate",
+          "value": "EGP 8,400 per member",
+          "note": "Synthetic demonstration value; replace before customer use."
+        },
+        {
+          "label": "Enhanced annual rate",
+          "value": "EGP 12,600 per member",
+          "note": "Synthetic demonstration value; replace before customer use."
+        },
+        {
+          "label": "Family pricing",
+          "value": "Quoted per census after underwriting",
+          "note": "Synthetic demonstration rule."
+        }
+      ]
+    },
+    {
+      "title": "Claims & network",
+      "facts": [
+        {
+          "label": "Claim submission window",
+          "value": "30 calendar days from service",
+          "note": "Synthetic demonstration rule; replace before customer use."
+        },
+        {
+          "label": "Network access",
+          "value": "Direct billing within the contracted medical network",
+          "note": "Synthetic demonstration rule."
+        },
+        {
+          "label": "Out-of-network claims",
+          "value": "Reimbursement is subject to plan limits and documentation",
+          "note": "Synthetic demonstration rule."
+        }
+      ]
+    }
+  ]
+}

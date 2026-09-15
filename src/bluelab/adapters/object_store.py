@@ -131,6 +131,8 @@ class ObjectStore(Protocol):
 
     async def get(self, ref: ObjectRef) -> bytes: ...
 
+    async def exists(self, ref: ObjectRef) -> bool: ...
+
     async def delete(self, ref: ObjectRef, *, reason: DeletionReason) -> None: ...
 
     async def presign_get(
@@ -186,6 +188,25 @@ class S3ObjectStore:
 
         async def operation() -> bytes:
             return await asyncio.to_thread(blocking_get)
+
+        return await self._call(operation)
+
+    async def exists(self, ref: ObjectRef) -> bool:
+        """Check one exact key with HEAD; never grant ops access to object bytes."""
+        from botocore.exceptions import ClientError  # type: ignore[import-untyped]
+
+        def blocking_head() -> bool:
+            try:
+                self._client.head_object(Bucket=self._bucket, Key=ref.key)
+            except ClientError as exc:
+                code = str(exc.response.get("Error", {}).get("Code", ""))
+                if code in {"404", "NoSuchKey", "NotFound"}:
+                    return False
+                raise
+            return True
+
+        async def operation() -> bool:
+            return await asyncio.to_thread(blocking_head)
 
         return await self._call(operation)
 

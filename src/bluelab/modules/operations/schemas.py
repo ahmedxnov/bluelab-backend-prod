@@ -143,3 +143,24 @@ class CursorPage(BaseModel):
 class AuditPage(BaseModel):
     data: list[AuditEntry]
     pagination: CursorPage
+
+
+class ResolveFaultRequest(_Request):
+    reason: Annotated[str, Field(min_length=1, max_length=1_000)]
+
+
+class FaultView(BaseModel):
+    id: UUID
+    org_id: UUID
+    kind: Literal["grading_failure", "playback_asset"]
+    attempt_id: UUID
+    status: Literal["open", "resolved"]
+    detail: dict[str, Any]
+    opened_at: datetime
+    resolved_at: datetime | None = None
+    resolution_note: str | None = None
+
+
+class FaultPage(BaseModel):
+    data: list[FaultView]
+    pagination: CursorPage

@@ -7,8 +7,9 @@ from __future__ import annotations
 from typing import Annotated, NoReturn
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
+from bluelab.adapters.object_store import ObjectRef
 from bluelab.api.deps import (
     ClientAddress,
     DeliverySecretSealerDep,
@@ -17,18 +18,22 @@ from bluelab.api.deps import (
     OpsTotpUnsealerDep,
     TotpReplayStoreDep,
     enforce_ops_sign_in_rate,
+    object_store_from_request,
     ops_session_cookie,
 )
 from bluelab.modules.identity import service as identity_service
-from bluelab.modules.operations import service
+from bluelab.modules.operations import faults, service
 from bluelab.modules.operations.schemas import (
     AuditPage,
+    FaultPage,
+    FaultView,
     OpsAccountCreate,
     OpsAccountView,
     OpsOrgCreate,
     OpsOrgView,
     OpsSignInRequest,
     OpsSignInView,
+    ResolveFaultRequest,
     canonical_domain,
 )
 from bluelab.platform.clock import now
@@ -38,6 +43,7 @@ from bluelab.platform.db.scope import ScopeContext
 from bluelab.platform.db.session import scoped_transaction
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError, not_found
+from bluelab.platform.resilience import DependencyUnavailable
 from bluelab.platform.security.cookies import (
     OPS_SESSION_COOKIE,
     CookieSpec,
@@ -262,4 +268,72 @@ async def list_audit(
             org_id=org_id,
             cursor=cursor,
             limit=limit,
+        )
+
+
+@router.get(
+    "/faults",
+    operation_id="opsListFaults",
+    response_model=FaultPage,
+    status_code=status.HTTP_200_OK,
+    summary="Fault queue",
+)
+async def list_faults(
+    record: OpsPrincipal,
+    status_filter: Annotated[
+        faults.FaultFilter,
+        Query(alias="status", description="Open, resolved, or all faults."),
+    ] = "open",
+    cursor: Annotated[
+        str | None,
+        Query(description="Opaque pagination cursor from a previous response."),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> FaultPage:
+    async with scoped_transaction(
+        ops_scope(ops_account_id=UUID(record.ops_account_id))
+    ) as db:
+        return await faults.list_faults(
+            db, status=status_filter, cursor=cursor, limit=limit
+        )
+
+
+@router.post(
+    "/faults/{fault_id}/resolve",
+    operation_id="opsResolveFault",
+    response_model=FaultView,
+    status_code=status.HTTP_200_OK,
+    summary="Resolve a fault (re-drive the job)",
+)
+async def resolve_fault(
+    fault_id: UUID,
+    payload: ResolveFaultRequest,
+    record: OpsPrincipal,
+    request: Request,
+    settings: SettingsDep,
+) -> FaultView:
+    playback_available: bool | None = None
+    async with scoped_transaction(
+        ops_scope(ops_account_id=UUID(record.ops_account_id))
+    ) as db:
+        identity = await faults.load_fault(db, fault_id=fault_id)
+    if identity.kind == "playback_asset" and identity.status == "open":
+        try:
+            object_store = object_store_from_request(request, settings)
+            playback_available = await object_store.exists(
+                ObjectRef.recording(
+                    org_id=identity.org_id, attempt_id=identity.attempt_id
+                )
+            )
+        except DependencyUnavailable:
+            raise ProblemError(catalog.SERVICE_UNAVAILABLE) from None
+
+    async with scoped_transaction(
+        ops_scope(ops_account_id=UUID(record.ops_account_id))
+    ) as db:
+        return await faults.resolve_fault(
+            db,
+            fault_id=fault_id,
+            reason=payload.reason,
+            playback_available=playback_available,
         )

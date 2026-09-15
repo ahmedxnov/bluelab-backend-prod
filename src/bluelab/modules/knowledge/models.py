@@ -43,8 +43,12 @@ class ProductDocument(UUIDPrimaryKey, Mutable, Base):
 
     __tablename__ = "product_document"
 
-    org_id: Mapped[UUID] = mapped_column(ForeignKey("org.id"), nullable=False, index=True)
-    team_id: Mapped[UUID] = mapped_column(ForeignKey("account.id"), nullable=False, index=True)
+    org_id: Mapped[UUID] = mapped_column(
+        ForeignKey("org.id"), nullable=False, index=True
+    )
+    team_id: Mapped[UUID] = mapped_column(
+        ForeignKey("account.id"), nullable=False, index=True
+    )
     title: Mapped[str] = mapped_column(nullable=False)
 
     live_version: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
@@ -72,12 +76,22 @@ class FactSet(UUIDPrimaryKey, Timestamped, Base):
     compares."""
 
     created_by: Mapped[UUID] = mapped_column(ForeignKey("account.id"), nullable=False)
+    published_by_account_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("account.id"), nullable=True
+    )
+    """Publisher of a live set, retained in frozen provenance snapshots.
+
+    The expand migration keeps this nullable for the N/N+1 window; every Phase 3
+    publisher writes it and snapshot capture falls back to ``created_by`` only
+    for rows written by release N during that window.
+    """
 
     __table_args__ = (
         enum_check("kind", FACT_SET_KINDS),
         enum_check("source", FACT_SOURCES),
         CheckConstraint(
-            "(kind = 'draft') = (based_on_version is not null)", name="draft_carries_base_version"
+            "(kind = 'draft') = (based_on_version is not null)",
+            name="draft_carries_base_version",
         ),
         scoped_fk(
             columns=("document_id", "org_id", "team_id"),
@@ -85,8 +99,18 @@ class FactSet(UUIDPrimaryKey, Timestamped, Base):
             parent_columns=("id", "org_id", "team_id"),
             ondelete="CASCADE",
         ),
-        Index("uq_fact_set_live", "document_id", unique=True, postgresql_where=text("kind = 'live'")),
-        Index("uq_fact_set_draft", "document_id", unique=True, postgresql_where=text("kind = 'draft'")),
+        Index(
+            "uq_fact_set_live",
+            "document_id",
+            unique=True,
+            postgresql_where=text("kind = 'live'"),
+        ),
+        Index(
+            "uq_fact_set_draft",
+            "document_id",
+            unique=True,
+            postgresql_where=text("kind = 'draft'"),
+        ),
     )
 
 
@@ -135,7 +159,9 @@ class DocumentUpload(UUIDPrimaryKey, Timestamped, Base):
     object_key: Mapped[str] = mapped_column(nullable=False)
     filename: Mapped[str] = mapped_column(nullable=False)
     byte_size: Mapped[int] = mapped_column(nullable=False)
-    status: Mapped[str] = mapped_column(nullable=False, server_default=text("'received'"))
+    status: Mapped[str] = mapped_column(
+        nullable=False, server_default=text("'received'")
+    )
     failure_reason: Mapped[str | None] = mapped_column(nullable=True)
     created_by: Mapped[UUID] = mapped_column(ForeignKey("account.id"), nullable=False)
 

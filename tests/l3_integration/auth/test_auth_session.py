@@ -358,7 +358,8 @@ async def test_a_forged_cookie_is_refused(client):
     """A 256-bit opaque id is not guessable, but the refusal path still has to
     exist and still has to look like every other invalid session."""
     response = await client.get(
-        "/api/v1/auth/session", cookies={SESSION_COOKIE: "not-a-real-session-id"}
+        "/api/v1/auth/session",
+        headers={"cookie": f"{SESSION_COOKIE}=not-a-real-session-id"},
     )
 
     assert response.status_code == 401
@@ -380,7 +381,9 @@ async def test_sign_out_ends_the_session_server_side(client, world, credentials)
     signed_out = await client.delete("/api/v1/auth/session")
     assert signed_out.status_code == 204
 
-    replayed = await client.get("/api/v1/auth/session", cookies={SESSION_COOKIE: raw})
+    replayed = await client.get(
+        "/api/v1/auth/session", headers={"cookie": f"{SESSION_COOKIE}={raw}"}
+    )
     assert replayed.status_code == 401, "the session survived sign-out"
 
 
@@ -389,7 +392,7 @@ async def test_signing_out_of_an_expired_session_still_succeeds(client):
     """`204`, not `401`. A user whose session lapsed in another tab should not be
     met with a sign-out button that refuses to work."""
     response = await client.delete(
-        "/api/v1/auth/session", cookies={SESSION_COOKIE: "already-gone"}
+        "/api/v1/auth/session", headers={"cookie": f"{SESSION_COOKIE}=already-gone"}
     )
 
     assert response.status_code == 204
@@ -690,7 +693,9 @@ async def test_a_gate_this_release_does_not_know_is_refused_not_a_500(guarded, w
         gate="a_gate_from_the_future",
     )
 
-    response = await guarded.http.get(guarded.PROBE, cookies={SESSION_COOKIE: raw})
+    response = await guarded.http.get(
+        guarded.PROBE, headers={"cookie": f"{SESSION_COOKIE}={raw}"}
+    )
 
     assert response.status_code == 401, "an unrecognised gate must not admit the session"
     assert response.json()["type"].endswith("/session-invalid")

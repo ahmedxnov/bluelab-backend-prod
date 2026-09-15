@@ -215,12 +215,39 @@ async def test_stage_can_be_composed_before_the_first_invite(session, make_posit
 
 @pytest.fixture
 async def graded_attempt(session, make_drill, base_org):
-    """An attempt with a scorecard and one transcript row, all committed."""
+    """A complete graded artifact, committed and ready for mutation attacks."""
     from bluelab.platform.ids import new_id
 
-    drill = await make_drill(status="published")
-    ids = {"attempt": new_id(), "scorecard": new_id(), "rep": new_id()}
+    drill = await make_drill(status="draft")
+    ids = {
+        "drill": drill,
+        "attempt": new_id(),
+        "scorecard": new_id(),
+        "dimension": new_id(),
+        "moment": new_id(),
+        "rep": new_id(),
+    }
     async with session.begin():
+        await session.execute(
+            text(
+                "insert into rubric_dimension "
+                "(id, org_id, team_id, drill_id, ord, name, weight, rationale)"
+                " values (:id, :org, :team, :drill, 1, 'Discovery', 100, 'Ask well')"
+            ),
+            {
+                "id": ids["dimension"],
+                "org": base_org["org"],
+                "team": base_org["manager"],
+                "drill": drill,
+            },
+        )
+        await session.execute(
+            text(
+                "update drill set status='published', label='Buyer', scenario='{\"v\": 1}',"
+                " answer_key='{\"v\": 1}', published_at=now() where id=:id"
+            ),
+            {"id": drill},
+        )
         await session.execute(
             text(
                 "insert into account (id, org_id, team_id, email, display_name, role, password_hash)"
@@ -250,7 +277,8 @@ async def graded_attempt(session, make_drill, base_org):
             {"a": ids["attempt"], "org": base_org["org"], "team": base_org["manager"]},
         )
         await session.execute(
-            text("update attempt set status = 'graded' where id = :id"), {"id": ids["attempt"]}
+            text("update attempt set status = 'completed' where id = :id"),
+            {"id": ids["attempt"]},
         )
         await session.execute(
             text(
@@ -261,6 +289,39 @@ async def graded_attempt(session, make_drill, base_org):
                 "id": ids["scorecard"], "org": base_org["org"], "team": base_org["manager"],
                 "a": ids["attempt"],
             },
+        )
+        await session.execute(
+            text(
+                "insert into dimension_score "
+                "(scorecard_id, rubric_dimension_id, org_id, team_id, score, note)"
+                " values (:scorecard, :dimension, :org, :team, 7.5, 'Good discovery.')"
+            ),
+            {
+                "scorecard": ids["scorecard"],
+                "dimension": ids["dimension"],
+                "org": base_org["org"],
+                "team": base_org["manager"],
+            },
+        )
+        await session.execute(
+            text(
+                "insert into moment "
+                "(id, org_id, team_id, scorecard_id, attempt_id, transcript_seq,"
+                " at_ms, severity, rubric_dimension_id)"
+                " values (:id, :org, :team, :scorecard, :attempt, 1, 0, 'green', :dimension)"
+            ),
+            {
+                "id": ids["moment"],
+                "org": base_org["org"],
+                "team": base_org["manager"],
+                "scorecard": ids["scorecard"],
+                "attempt": ids["attempt"],
+                "dimension": ids["dimension"],
+            },
+        )
+        await session.execute(
+            text("update attempt set status = 'graded' where id = :id"),
+            {"id": ids["attempt"]},
         )
     return ids
 
@@ -282,6 +343,106 @@ async def test_scorecard_cannot_be_deleted(session, graded_attempt):
         "delete from scorecard where id = :id",
         {"id": graded_attempt["scorecard"]},
         matching="insert-only",
+    )
+
+
+@pytest.mark.verifies("FR-SCR-003", "AC-SCR-002")
+async def test_dimension_cannot_be_appended_after_grading(
+    session, graded_attempt, base_org
+):
+    await _expect_refusal(
+        session,
+        "insert into dimension_score "
+        "(scorecard_id, rubric_dimension_id, org_id, team_id, score, note)"
+        " values (:scorecard, :dimension, :org, :team, 1.0, 'Late mutation.')",
+        {
+            "scorecard": graded_attempt["scorecard"],
+            "dimension": graded_attempt["dimension"],
+            "org": base_org["org"],
+            "team": base_org["manager"],
+        },
+        matching="graded record is frozen",
+    )
+
+
+@pytest.mark.verifies("FR-SCR-003", "AC-SCR-002")
+async def test_moment_cannot_be_appended_after_grading(
+    session, graded_attempt, base_org
+):
+    from bluelab.platform.ids import new_id
+
+    await _expect_refusal(
+        session,
+        "insert into moment "
+        "(id, org_id, team_id, scorecard_id, attempt_id, transcript_seq,"
+        " at_ms, severity, rubric_dimension_id)"
+        " values (:id, :org, :team, :scorecard, :attempt, 1, 0, 'green', :dimension)",
+        {
+            "id": new_id(),
+            "org": base_org["org"],
+            "team": base_org["manager"],
+            "scorecard": graded_attempt["scorecard"],
+            "attempt": graded_attempt["attempt"],
+            "dimension": graded_attempt["dimension"],
+        },
+        matching="graded record is frozen",
+    )
+
+
+@pytest.mark.verifies("FR-SCR-003", "FR-SCR-007")
+async def test_moment_cannot_borrow_another_attempts_transcript_anchor(
+    session, graded_attempt, base_org
+):
+    from bluelab.platform.ids import new_id
+
+    other_attempt = new_id()
+    async with session.begin():
+        await session.execute(
+            text(
+                "insert into attempt "
+                "(id, org_id, team_id, drill_id, rep_account_id, self_authored, status)"
+                " values (:id, :org, :team, :drill, :rep, false, 'in_progress')"
+            ),
+            {
+                "id": other_attempt,
+                "org": base_org["org"],
+                "team": base_org["manager"],
+                "drill": graded_attempt["drill"],
+                "rep": graded_attempt["rep"],
+            },
+        )
+        await session.execute(
+            text(
+                "insert into transcript_entry "
+                "(attempt_id, seq, org_id, team_id, speaker, at_ms, text)"
+                " values (:attempt, 1, :org, :team, 'participant', 0, 'Other call')"
+            ),
+            {
+                "attempt": other_attempt,
+                "org": base_org["org"],
+                "team": base_org["manager"],
+            },
+        )
+        await session.execute(
+            text("update attempt set status='completed' where id=:id"),
+            {"id": other_attempt},
+        )
+
+    await _expect_refusal(
+        session,
+        "insert into moment "
+        "(id, org_id, team_id, scorecard_id, attempt_id, transcript_seq,"
+        " at_ms, severity, rubric_dimension_id)"
+        " values (:id, :org, :team, :scorecard, :attempt, 1, 0, 'green', :dimension)",
+        {
+            "id": new_id(),
+            "org": base_org["org"],
+            "team": base_org["manager"],
+            "scorecard": graded_attempt["scorecard"],
+            "attempt": other_attempt,
+            "dimension": graded_attempt["dimension"],
+        },
+        matching="does not match scorecard attempt",
     )
 
 

@@ -33,6 +33,7 @@ aid.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import StrEnum
 from typing import Final
 
@@ -81,6 +82,22 @@ dependency_duration = _meter.create_histogram(
     "dependency.duration",
     unit="ms",
     description="Bounded external capability call duration by dependency",
+)
+grading_cost_usd = _meter.create_histogram(
+    "grading.cost_usd",
+    unit="USD",
+    description="Modeled evaluator cost for one grading pass",
+)
+grading_consistency_delta = _meter.create_histogram(
+    "grading.consistency_delta",
+    description="Synthetic reference-corpus score delta; never customer content",
+)
+playback_access = _meter.create_counter(
+    "playback.access",
+    description="Authorized review playback result by closed recording state",
+)
+model_version_observed = _meter.create_counter(
+    "model.version", description="Provider-served model version observations"
 )
 
 # ── operations ────────────────────────────────────────────────────────────────
@@ -157,6 +174,43 @@ def record_job(*, lane: str, outcome: JobOutcome, duration_ms: float) -> None:
 def record_grading_turnaround(*, duration_ms: float) -> None:
     """Call end to review available — the NFR-005 SLI."""
     grading_turnaround_ms.record(duration_ms, _labels())
+
+
+def record_grading_cost(*, cost_usd: Decimal) -> None:
+    """Record evaluator spend without attempt identity or model content."""
+    grading_cost_usd.record(float(cost_usd), _labels())
+
+
+def record_grading_consistency(
+    *, delta: float, score_level: str, call_type: str
+) -> None:
+    """Record one synthetic canary delta using only closed, bounded labels."""
+    if score_level not in {"overall", "dimension"}:
+        raise ValueError("score level must be overall or dimension")
+    if call_type not in {"discovery", "post_proposal", "renewal", "upsell"}:
+        raise ValueError("call type is outside the closed inventory")
+    grading_consistency_delta.record(
+        delta,
+        _labels(
+            participant_kind="synthetic",
+            score_level=score_level,
+            call_type=call_type,
+        ),
+    )
+
+
+def record_playback_access(*, outcome: str) -> None:
+    """Record a content-free authorized playback outcome."""
+    if outcome not in {"pending", "available", "unavailable", "erased", "none"}:
+        raise ValueError("playback outcome is outside the closed inventory")
+    playback_access.add(1, _labels(outcome=outcome))
+
+
+def record_model_version(*, capability: str, model_version: str) -> None:
+    """Observe the bounded vendor model identity without request/response content."""
+    model_version_observed.add(
+        1, _labels(capability=capability, model_version=model_version[:100])
+    )
 
 
 def record_email_delivery(*, kind: str, state: str) -> None:
