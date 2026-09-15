@@ -130,8 +130,8 @@ def test_livekit_token_has_minimal_single_room_grant() -> None:
         account_role="rep",
     )
     token = mint_participant_token(
-        api_key="key",
-        api_secret="secret-secret-secret-secret-secret12",
+        api_key="key",  # pragma: allowlist secret -- synthetic LiveKit test credential
+        api_secret="secret-secret-secret-secret-secret12",  # pragma: allowlist secret -- synthetic LiveKit test credential
         call=call,
     )
     claims = jwt.decode(
