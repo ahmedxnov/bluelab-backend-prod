@@ -43,6 +43,7 @@ def registration(settings: Settings, *, object_store: ObjectStore | None = None,
         await store.put(ref, pdf_bytes, content_type="application/pdf")
         if await reports.store_rendered_report(session, candidate_id=candidate_id, takeaway=takeaway, object_key=ref.key):
             metrics.record_report_render(state="available")
+            await reports.queue_eligible_candidate_report(session, candidate_id=candidate_id)
 
     async def exhausted(session: AsyncSession, job: JobEnvelope) -> None:
         await reports.mark_render_failed(session, candidate_id=UUID(str(job.args["candidate_id"])))

@@ -28,6 +28,7 @@ from bluelab.adapters.secrets import (
 from bluelab.notifications.templates import (
     E1Purpose,
     EmailKind,
+    render_completion_email,
     render_e1,
     render_e2,
     render_report_email,
@@ -208,7 +209,7 @@ async def dispatch_e2(session: AsyncSession, *, email_send_id: UUID, unsealer: S
     return DispatchOutcome.SENT
 
 
-async def dispatch_e3_or_e4(session: AsyncSession, *, email_send_id: UUID, transport: EmailTransport, sender: str, object_store: ObjectStore) -> DispatchOutcome:
+async def dispatch_e3_or_e4(session: AsyncSession, *, email_send_id: UUID, transport: EmailTransport, sender: str, object_store: ObjectStore, public_app_url: str) -> DispatchOutcome:
     """Send only ready, single-format report PDFs; a queued duplicate locks out."""
     send = (await session.execute(_LOCK_SEND, {"email_send_id": email_send_id})).mappings().one_or_none()
     if send is None: return DispatchOutcome.SUBJECT_ABSENT
@@ -234,6 +235,12 @@ async def dispatch_e3_or_e4(session: AsyncSession, *, email_send_id: UUID, trans
             if ref != ObjectRef.report(org_id=UUID(str(send["org_id"])), candidate_id=candidate_id): raise TerminalDispatchError("shortlist report key is invalid")
             attachments.append((f"candidate-report-{candidate_id}.pdf", await object_store.get(ref), "application/pdf"))
         message = render_report_email(email_send_id=email_send_id, recipient=str(recipients[0]), recipient_name="HR", position_title="Shortlist", sender=sender, body=str(row["email_body"]), attachments=tuple(attachments), bcc_recipients=tuple(str(value) for value in recipients[1:]))
+    elif kind == EmailKind.E5_COMPLETION:
+        row = (await session.execute(text("""select a.email,a.display_name,c.name,p.title,p.id position_id
+          from candidate c join position p on p.id=c.position_id join account a on a.id=p.team_id
+         where c.id=:id and c.completed_at is not null and p.notify_on_completion"""), {"id": send["candidate_id"]})).mappings().one_or_none()
+        if row is None: return DispatchOutcome.SUBJECT_ABSENT
+        message = render_completion_email(email_send_id=email_send_id, recipient=str(row["email"]), manager_name=str(row["display_name"]), candidate_name=str(row["name"]), position_title=str(row["title"]), sender=sender, pipeline_url=f"{public_app_url.rstrip('/')}/hiring/{row['position_id']}/candidates")
     else:
         raise TerminalDispatchError("email kind has no report dispatcher")
     provider_message_id = await transport.send(message)

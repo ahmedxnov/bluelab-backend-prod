@@ -185,6 +185,7 @@ async def render_report(candidate_id: UUID, record: ManagerPrincipal) -> dict[st
 async def put_decision(candidate_id: UUID, payload: CandidateDecision, record: ManagerPrincipal) -> dict[str, object]:
     async with scoped_transaction(scope_of(record)) as db:
         await shortlist.decide(db, candidate_id=candidate_id, decision=payload.decision)
+        await reports.queue_eligible_candidate_report(db, candidate_id=candidate_id)
         row = (await db.execute(text("select position_id from candidate where id=:id"), {"id": candidate_id})).scalar_one_or_none()
         if row is None: raise not_found()
         page = await service.pipeline(db, position_id=row, view="pipeline")

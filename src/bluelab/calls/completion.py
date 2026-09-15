@@ -35,6 +35,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bluelab.platform.ids import new_id
 from bluelab.platform.queue.catalog import Lane
 from bluelab.platform.queue.enqueue import enqueue
 
@@ -92,6 +93,14 @@ _LAST_OPEN_STAGE = text(
        )
     """
 )
+
+_CREATE_E5 = text("""
+    insert into email_send (id,org_id,kind,dedupe_key,candidate_id)
+    select :id,c.org_id,'E5_completion',cast(c.id as text),c.id
+      from candidate c join position p on p.id=c.position_id
+     where c.id=:candidate and c.completed_at is not null and p.notify_on_completion
+    on conflict (kind,dedupe_key) do nothing returning id
+""")
 
 
 async def complete(
@@ -176,7 +185,14 @@ async def complete(
         # The terminal marker, set only when no stage remains open (FR-CND-008).
         # Setting it also terminates every token the candidate holds, because
         # token termination is derived from this column (FR-IDA-013).
-        await session.execute(_LAST_OPEN_STAGE, {"candidate": candidate_id})
+        completed = await session.execute(_LAST_OPEN_STAGE, {"candidate": candidate_id})
+        if completed.rowcount:  # type: ignore[attr-defined]
+            # Rendering waits behind grading when necessary; its retry policy is
+            # the readiness gate for every report-bearing email.
+            await enqueue(session, Lane.RENDER_REPORT, {"candidate_id": str(candidate_id)}, org_id=org_id, team_id=team_id)
+            email_send_id = (await session.execute(_CREATE_E5, {"id": new_id(), "candidate": candidate_id})).scalar_one_or_none()
+            if email_send_id is not None:
+                await enqueue(session, Lane.DISPATCH_EMAIL, {"email_send_id": str(email_send_id)}, org_id=org_id, team_id=team_id)
 
     # The completion event. This insert commits with the transcript and the
     # status flip or not at all — which is what makes "a completed call is never

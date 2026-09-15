@@ -1433,6 +1433,12 @@ async def test_t9_decision_frozen_after_shortlist(session, base_org, make_positi
             {"id": candidate, "org": base_org["org"], "team": base_org["manager"],
              "pos": position, "email": f"d-{candidate}@t.test"},
         )
+        await session.execute(
+            text("""insert into candidate_report (candidate_id,org_id,team_id,pdf_status,pdf_object_key)
+                     values (:candidate,:org,:team,'available',:object_key)"""),
+            {"candidate": candidate, "org": base_org["org"], "team": base_org["manager"],
+             "object_key": f"reports/{base_org['org']}/{candidate}.pdf"},
+        )
 
     async with session.begin():
         await send_shortlist(

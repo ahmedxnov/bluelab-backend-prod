@@ -167,3 +167,13 @@ def render_report_email(*, email_send_id: UUID, recipient: str, recipient_name: 
     name, position = safe_text(recipient_name), safe_text(position_title)
     message = safe_template_text(body) if body else "Your BlueLab candidate report is attached."
     return OutboundEmail(recipient=recipient, sender=sender, subject=f"BlueLab report: {position}", text_body=f"Hello {name},\n\n{message}\n", html_body=f"<p>Hello {html.escape(name)},</p><p>{html.escape(message).replace(chr(10), '<br>')}</p>", message_id=f"<{email_send_id}@notifications.bluelab>", attachments=attachments, bcc_recipients=bcc_recipients)
+
+
+def render_completion_email(*, email_send_id: UUID, recipient: str, manager_name: str, candidate_name: str, position_title: str, sender: str, pipeline_url: str) -> OutboundEmail:
+    """Render E-5 without assessment content or an attachment."""
+    recipient, sender = validate_address(recipient), validate_address(sender)
+    manager, candidate, position = safe_text(manager_name), safe_text(candidate_name), safe_text(position_title)
+    url = pipeline_url
+    text_body = f"Hello {manager},\n\n{candidate} completed the {position} assessment.\nReview the pipeline: {url}\n"
+    html_body = f"<p>Hello {html.escape(manager)},</p><p>{html.escape(candidate)} completed the {html.escape(position)} assessment.</p><p><a href=\"{html.escape(url, quote=True)}\">Review the pipeline</a></p>"
+    return OutboundEmail(recipient=recipient, sender=sender, subject=f"Assessment complete: {position}", text_body=text_body, html_body=html_body, message_id=f"<{email_send_id}@notifications.bluelab>")

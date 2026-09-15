@@ -18,6 +18,7 @@ which is why V-11 can count them without a status to maintain.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from uuid import UUID
 
 from sqlalchemy import text
@@ -119,7 +120,7 @@ async def send_shortlist(
     team_id: UUID,
     sent_by: UUID,
     candidate_ids: list[UUID],
-    recipients: list[str],
+    recipients: list[str | Mapping[str, object]],
     email_body: str,
 ) -> UUID:
     """Run T-9's send half inside the caller's transaction.
@@ -139,7 +140,10 @@ async def send_shortlist(
     """
     import json
 
-    normalized = sorted({validate_address(value).lower() for value in recipients})
+    normalized = sorted({
+        validate_address(value if isinstance(value, str) else str(value.get("email", ""))).lower()
+        for value in recipients
+    })
     if not normalized:
         raise ValueError("at least one recipient is required")
     body = safe_template_text(email_body)

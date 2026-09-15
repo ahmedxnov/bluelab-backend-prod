@@ -21,6 +21,9 @@ from bluelab.adapters.object_store import AuthorizedObjectRead, ObjectRef, Objec
 from bluelab.adapters.report_takeaway import CrossDrillBasis, DrillEvidence
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError, not_found
+from bluelab.platform.ids import new_id
+from bluelab.platform.queue.catalog import Lane
+from bluelab.platform.queue.enqueue import enqueue
 
 
 class ReportTakeawayProvider(Protocol):
@@ -68,6 +71,7 @@ _MANAGER_REPORT = text(
     with report_base as (
         select c.id candidate_id,c.org_id,c.name,c.email,c.phone,c.linkedin,c.source,
                c.internal_note,c.decision,p.id position_id,p.title position_title,
+               exists(select 1 from shortlist_candidate sc where sc.candidate_id=c.id) decision_frozen,
                coalesce(v.expired_incomplete,false) incomplete,
                cr.takeaway,coalesce(cr.pdf_status,'none') pdf_status
           from candidate c
@@ -180,6 +184,8 @@ async def manager_report(session: AsyncSession, *, candidate_id: UUID) -> dict[s
         },
         "position": {"id": row["position_id"], "title": row["position_title"]},
         "incomplete": bool(row["incomplete"]),
+        "decision": row["decision"],
+        "decision_frozen": bool(row["decision_frozen"]),
         "drills_completed": int(row["drills_completed"]),
         "drills_total": int(row["drills_total"]),
         "total_seconds": None if row["total_seconds"] is None else int(row["total_seconds"]),
@@ -312,3 +318,26 @@ async def mark_render_failed(session: AsyncSession, *, candidate_id: UUID) -> No
         update candidate_report set pdf_status='failed'
          where candidate_id=:candidate and pdf_status='pending'
     """), {"candidate": candidate_id})
+
+
+async def queue_eligible_candidate_report(session: AsyncSession, *, candidate_id: UUID) -> bool:
+    """Create E-3 only after its policy condition and the PDF readiness gate hold."""
+    row = (await session.execute(text("""
+        select c.org_id,c.team_id
+          from candidate c join position p on p.id=c.position_id
+          join candidate_report cr on cr.candidate_id=c.id
+         where c.id=:candidate and cr.pdf_status='available'
+           and ((p.report_policy='after_finish' and c.completed_at is not null)
+             or (p.report_policy='rejected_only' and c.decision='rejected'))
+    """), {"candidate": candidate_id})).mappings().one_or_none()
+    if row is None:
+        return False
+    email_send_id = (await session.execute(text("""
+        insert into email_send (id,org_id,kind,dedupe_key,candidate_id)
+        values (:id,:org,'E3_candidate_report',cast(:candidate as text),:candidate)
+        on conflict (kind,dedupe_key) do nothing returning id
+    """), {"id": new_id(), "org": row["org_id"], "candidate": candidate_id})).scalar_one_or_none()
+    if email_send_id is None:
+        return False
+    await enqueue(session, Lane.DISPATCH_EMAIL, {"email_send_id": str(email_send_id)}, org_id=row["org_id"], team_id=row["team_id"])
+    return True
