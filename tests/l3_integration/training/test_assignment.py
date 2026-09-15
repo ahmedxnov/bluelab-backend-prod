@@ -8,6 +8,7 @@ rather than asserting only that the mutation returned 200.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import date
 
 import pytest
@@ -102,6 +103,53 @@ async def _clear_test_acceptances(training_engine, world):
     async with maker() as session, session.begin():
         await session.execute(text("delete from consent_record where org_id = :org"), {"org": world.org})
         await session.execute(text("delete from terms_acceptance where org_id = :org"), {"org": world.org})
+
+
+@pytest.mark.verifies("FR-TRM-011", "FR-TRM-013", "AC-TRM-006")
+async def test_assignment_read_preloads_the_current_state_or_a_published_empty_state(
+    client, sign_in, world, training_engine
+) -> None:
+    """The editor read has the PUT boundary and expresses no assignment as null."""
+    await _record_current_consent(
+        training_engine, org_id=world.org, account_ids=(world.manager,)
+    )
+    await sign_in(world.manager_email)
+
+    current = await client.get(f"/api/v1/drills/{world.drill_discovery}/assignment")
+    assert current.status_code == 200, current.text
+    body = current.json()
+    assert body["drill_id"] == str(world.drill_discovery)
+    assert body["attempts_allowed"] == 3
+    assert [recipient["account_id"] for recipient in body["recipients"]] == sorted(
+        [str(world.rep), str(world.other_rep)]
+    )
+
+    probe_drill = new_id()
+    maker = async_sessionmaker(training_engine, expire_on_commit=False)
+    try:
+        async with maker() as session, session.begin():
+            await session.execute(
+                text(
+                    "insert into drill (id, org_id, team_id, author_account_id, self_authored, "
+                    "status, call_type, label, scenario, answer_key, published_at) "
+                    "values (:id, :org, :team, :author, false, 'published', 'renewal', 'empty assignment', "
+                    "cast(:scenario as jsonb), cast(:answer_key as jsonb), now())"
+                ),
+                {
+                    "id": probe_drill,
+                    "org": world.org,
+                    "team": world.manager,
+                    "author": world.manager,
+                    "scenario": json.dumps({"v": 1, "text": "probe"}),
+                    "answer_key": json.dumps({"v": 1, "points": ["probe"]}),
+                },
+            )
+        empty = await client.get(f"/api/v1/drills/{probe_drill}/assignment")
+        assert empty.status_code == 200, empty.text
+        assert empty.json() is None
+    finally:
+        async with maker() as session, session.begin():
+            await session.execute(text("delete from drill where id = :id"), {"id": probe_drill})
 
 
 @pytest.mark.verifies("FR-TRM-011", "FR-TRM-012", "FR-TRM-013", "AC-TRM-005")
@@ -329,12 +377,17 @@ async def test_assignment_denies_nonpublished_and_out_of_team_drills(
     )
     await sign_in(world.manager_email)
     for drill_id in (world.manager_draft, world.archived_drill):
+        read = await client.get(f"/api/v1/drills/{drill_id}/assignment")
+        assert read.status_code == 409
+        assert read.json()["type"] == "/problems/drill-not-startable"
         response = await client.put(f"/api/v1/drills/{drill_id}/assignment", json=payload)
         assert response.status_code == 409
         assert response.json()["type"] == "/problems/drill-not-startable"
 
-    cross_team = await client.put(
-        f"/api/v1/drills/{team_world.other_drill}/assignment", json=payload
-    )
+    cross_team_read = await client.get(f"/api/v1/drills/{team_world.other_drill}/assignment")
+    assert cross_team_read.status_code == 404
+    assert cross_team_read.json()["type"] == "/problems/not-found"
+
+    cross_team = await client.put(f"/api/v1/drills/{team_world.other_drill}/assignment", json=payload)
     assert cross_team.status_code == 404
     assert cross_team.json()["type"] == "/problems/not-found"

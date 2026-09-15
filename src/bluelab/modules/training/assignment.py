@@ -5,7 +5,9 @@ the inventory of five is closed (specs/00 §6).
 
 from __future__ import annotations
 
-from datetime import date
+from collections.abc import Sequence
+from datetime import date, datetime
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import text
@@ -80,6 +82,33 @@ _RECIPIENTS = text(
     """
 )
 
+_CURRENT_ASSIGNMENT = text(
+    """
+    select a.id, a.drill_id, a.due_date, a.attempts_allowed, a.updated_at
+      from assignment a
+     where a.drill_id = :drill_id
+       and a.org_id = :org_id
+       and a.team_id = :team_id
+    """
+)
+
+
+class _AssignmentRow(Protocol):
+    """The selected mutable assignment columns used by the response projection."""
+
+    drill_id: UUID
+    due_date: date
+    attempts_allowed: int
+    updated_at: datetime
+
+
+class _AssignmentRecipientRow(Protocol):
+    """The selected recipient allowance columns used by the response projection."""
+
+    account_id: UUID
+    attempts_used: int
+    granted_at: datetime
+
 
 def _unique_recipient_ids(recipient_ids: list[UUID]) -> list[UUID]:
     """Collapse duplicate JSON array entries into the recipient set they denote.
@@ -89,6 +118,58 @@ def _unique_recipient_ids(recipient_ids: list[UUID]) -> list[UUID]:
     primary key and turn otherwise valid request syntax into a database error.
     """
     return list(dict.fromkeys(recipient_ids))
+
+
+def _assignment_view(
+    assignment: _AssignmentRow, recipients: Sequence[_AssignmentRecipientRow]
+) -> AssignmentView:
+    """Serialize the persisted assignment and its deterministic recipient order."""
+    return AssignmentView(
+        drill_id=assignment.drill_id,
+        due_date=assignment.due_date,
+        attempts_allowed=assignment.attempts_allowed,
+        recipients=[
+            AssignmentRecipientView(
+                account_id=row.account_id,
+                attempts_used=row.attempts_used,
+                granted_at=row.granted_at,
+            )
+            for row in recipients
+        ],
+        updated_at=assignment.updated_at,
+    )
+
+
+async def get_assignment(
+    session: AsyncSession,
+    *,
+    org_id: UUID,
+    team_id: UUID,
+    drill_id: UUID,
+) -> AssignmentView | None:
+    """Read the current editable assignment without widening the manager's scope.
+
+    A published team drill may deliberately have no assignment; `None` expresses
+    that empty editor state. The drill check precedes the assignment lookup so
+    self-authored, cross-team, and absent drills retain the generic 404 denial,
+    and draft or archived drills retain the same 409 as the replacement write.
+    """
+    scope = {"org_id": org_id, "team_id": team_id}
+    drill = (
+        await session.execute(_MANAGEABLE_DRILL, {**scope, "drill_id": drill_id})
+    ).one_or_none()
+    if drill is None:
+        raise ProblemError(catalog.NOT_FOUND)
+    if drill.status != "published":
+        raise ProblemError(catalog.DRILL_NOT_STARTABLE)
+
+    assignment = (
+        await session.execute(_CURRENT_ASSIGNMENT, {**scope, "drill_id": drill_id})
+    ).one_or_none()
+    if assignment is None:
+        return None
+    recipients = (await session.execute(_RECIPIENTS, {"assignment_id": assignment.id})).all()
+    return _assignment_view(assignment, recipients)
 
 
 async def put_assignment(
@@ -162,17 +243,4 @@ async def put_assignment(
     )
     recipients = (await session.execute(_RECIPIENTS, {"assignment_id": assignment.id})).all()
 
-    return AssignmentView(
-        drill_id=assignment.drill_id,
-        due_date=assignment.due_date,
-        attempts_allowed=assignment.attempts_allowed,
-        recipients=[
-            AssignmentRecipientView(
-                account_id=row.account_id,
-                attempts_used=row.attempts_used,
-                granted_at=row.granted_at,
-            )
-            for row in recipients
-        ],
-        updated_at=assignment.updated_at,
-    )
+    return _assignment_view(assignment, recipients)

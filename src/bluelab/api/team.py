@@ -223,6 +223,31 @@ async def put_drill_assignment(
 
 
 @router.get(
+    "/drills/{drill_id}/assignment",
+    operation_id="getAssignment",
+    response_model=AssignmentView | None,
+    status_code=status.HTTP_200_OK,
+    summary="Current assignment state for a published team drill",
+)
+async def get_drill_assignment(
+    drill_id: UUID, record: ManagerPrincipal
+) -> AssignmentView | None:
+    """Return the persisted editor state, or null before the first assignment.
+
+    This has the same manager, team, drill-status, and self-authored boundary as
+    the replacement write. It intentionally exposes no assignment to a caller
+    who cannot manage that drill.
+    """
+    async with scoped_transaction(scope_of(record)) as db:
+        return await assignment.get_assignment(
+            db,
+            org_id=UUID(record.org_id),
+            team_id=UUID(record.team_id),
+            drill_id=drill_id,
+        )
+
+
+@router.get(
     "/team/reps/{account_id}",
     operation_id="getRepDeepDive",
     response_model=RepDeepDive,

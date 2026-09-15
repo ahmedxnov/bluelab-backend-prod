@@ -149,6 +149,14 @@ CASES = (
         "FR-TRM-014",
     ),
     ContractCase(
+        "current assignment",
+        "GET",
+        f"/api/v1/drills/{VALID_DRILL_ID}/assignment",
+        {},
+        {"path": "/api/v1/drills/not-a-uuid/assignment"},
+        "FR-TRM-011",
+    ),
+    ContractCase(
         "assignment",
         "PUT",
         f"/api/v1/drills/{VALID_DRILL_ID}/assignment",

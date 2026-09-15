@@ -513,9 +513,10 @@ paths:
       tags: [Drills]
       summary: Replace authoring inputs (draft only)
       description: >
-        Replaces the intent wholesale while the drill is a draft (FR-DRL-002/005 — scenario changes
-        come only from input changes plus regeneration). Same job-relevance gate as creation
-        (FR-DRL-007). On a published or archived drill: 409 drill-not-draft (FR-DRL-015).
+        Replaces the intent wholesale while the drill is a draft and invalidates its scenario,
+        persona-derived label, rubric, captured grounding, and pending generation request
+        (FR-DRL-002/005). Same job-relevance gate as creation (FR-DRL-007). On a published or
+        archived drill: 409 drill-not-draft (FR-DRL-015). A displaced worker result is a no-op.
       operationId: replaceDrillInputs
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
@@ -549,11 +550,12 @@ paths:
       tags: [Drills]
       summary: Generate (or regenerate) the scenario
       description: >
-        Queues scenario generation from the drill's inputs (FR-DRL-004): buyer persona with unique
-        generated identity, situation context, product references drawn exclusively from the team's
-        published facts (FR-KNW-007), label derived from the persona. Regeneration replaces the
-        entire scenario (FR-DRL-005 / AC-DRL-002). Requires at least one challenge and one motive
-        (FR-DRL-002). Progress and failure surface on drill.generation (FR-DRL-006 — no fallback
+        In one transaction, captures the team's current published facts and version vector, records
+        a uniquely identified running request, invalidates the existing scenario, label, and rubric,
+        and queues scenario generation (FR-DRL-004/005). The worker derives the unique buyer persona,
+        situation, product references, and persona label from the stored inputs and captured grounding
+        (FR-KNW-007), and writes only for the matching request. Requires at least one challenge and one
+        motive (FR-DRL-002). Progress and failure surface on drill.generation (FR-DRL-006 — no fallback
         content; retry is a new request). 202 pattern: 00-contract-overview §8.
       operationId: generateScenario
       parameters:
@@ -584,9 +586,11 @@ paths:
       summary: Generate (or regenerate) the rubric
       description: >
         Queues rubric generation (FR-DRL-008): dimensions with name, weight, rationale, derived from
-        call type, challenges, motives, and published facts. When a rubric already exists the
+        call type, challenges, motives, stored scenario, and the scenario request's captured grounding.
+        When a rubric already exists the
         request must confirm that manual weight edits will be discarded (FR-DRL-011) — omitting
-        discard_confirmed answers 422. Replaces the rubric wholesale on success.
+        discard_confirmed answers 422. An accepted request discards the existing rubric before work
+        begins; only a complete validated result for the matching request installs the replacement.
       operationId: generateRubric
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
@@ -698,9 +702,12 @@ paths:
       tags: [Drills]
       summary: Publish a drill (freeze)
       description: >
-        The T-5 freeze transaction (FR-DRL-014): with a generated scenario and a rubric totaling
-        exactly 100, freezes scenario, persona-derived label, rubric, language, and a snapshot of
-        the team's published facts as the answer key — immutable thereafter (FR-DRL-015).
+        The T-5 freeze transaction (FR-DRL-014): with successfully generated scenario and rubric
+        states, a rubric totaling exactly 100, and a captured knowledge version vector that still
+        exactly matches the team's live vector, promotes the captured grounding to the answer key
+        and freezes scenario, persona-derived label, rubric, language, and answer key. The server
+        computes the canonical content hash; all frozen content is immutable thereafter (FR-DRL-015).
+        A knowledge-version mismatch answers 409 grounding-stale and requires scenario regeneration.
         Weights off 100 answer 409 weights-not-100 with meta.delta (AC-DRL-003 "+3 to balance").
       operationId: publishDrill
       parameters:
@@ -714,7 +721,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: "Problem types: weights-not-100 (meta.delta), generation-incomplete, drill-not-draft."
+          description: "Problem types: weights-not-100 (meta.delta), generation-incomplete, grounding-stale, drill-not-draft."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -780,9 +787,10 @@ paths:
       summary: Product reference for a drill
       description: >
         Read-only product reference reached from the brief (FR-KNW-009): the facts the drill was
-        grounded in — its frozen snapshot for published drills, the team's current published facts
-        for an author's draft — grouped by document with the provenance line. What a participant
-        studies equals what grading checks (FR-KNW-007). No edit affordance of any kind
+        grounded in — the captured grounding for an author's generated draft and the frozen answer
+        key for a published drill — grouped by document with the provenance line. What a participant
+        studies equals what grading checks (FR-KNW-007). A draft without both a generated scenario and
+        captured grounding answers 409 generation-incomplete. No edit affordance of any kind
         (AC-KNW-004).
       operationId: getDrillReference
       security:
@@ -798,6 +806,11 @@ paths:
               schema: { $ref: "#/components/schemas/ReferenceView" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: generation-incomplete (draft scenario or grounding is unavailable)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
   # ───────────────────────────── Knowledge ─────────────────────────────
@@ -1313,6 +1326,34 @@ paths:
         "429": { $ref: "#/components/responses/RateLimited" }
 
   /api/v1/drills/{drill_id}/assignment:
+    get:
+      tags: [Team]
+      summary: Current assignment for a published team drill
+      description: >
+        Returns the manager's current full-replace assignment state for editing: recipients, org-local
+        due date, allowance, and each recipient's current use. A published drill with no assignment
+        returns null. The manager's ambient team scope is enforced; an absent, self-authored, or
+        cross-team drill answers 404, and a draft or archived drill answers 409.
+      operationId: getAssignment
+      parameters:
+        - $ref: "#/components/parameters/DrillIdParam"
+      responses:
+        "200":
+          description: Current assignment, or null when the published drill has not been assigned.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/AssignmentView"
+                  - type: "null"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Problem type: drill-not-startable (draft/archived drills have no editable assignment)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "429": { $ref: "#/components/responses/RateLimited" }
     put:
       tags: [Team]
       summary: Assign or re-assign a drill
@@ -3237,7 +3278,7 @@ components:
 
     ScenarioView:
       type: object
-      description: Generated scenario, read-only — regenerate, never hand-edit (FR-DRL-005).
+      description: Generated scenario from the request-captured published facts; read-only — regenerate, never hand-edit (FR-DRL-005).
       required: [persona, context, product_references]
       properties:
         persona:
@@ -3254,7 +3295,7 @@ components:
         product_references:
           type: array
           items: { type: string }
-          description: Drawn exclusively from published facts (FR-KNW-007).
+          description: Drawn exclusively from the request-captured published facts (FR-KNW-007).
 
     RubricView:
       type: object
@@ -3276,11 +3317,50 @@ components:
 
     GenerationState:
       type: object
-      required: [scenario_status, rubric_status]
+      description: >
+        Projection of the drill's single request-bound generation lane. A displaced request cannot
+        alter these states. The error is present only for the active failed kind (FR-DRL-005/006).
+      required: [scenario_status, rubric_status, error]
       properties:
         scenario_status: { type: string, enum: [none, running, succeeded, failed] }
         rubric_status: { type: string, enum: [none, running, succeeded, failed] }
-        error: { type: [string, "null"], description: Failure reason for retry display (FR-DRL-006). }
+        error: { type: [string, "null"], minLength: 1, maxLength: 500, description: Bounded author-safe failure reason for retry display; null outside the failed state (FR-DRL-006). }
+      oneOf:
+        - required: [scenario_status, rubric_status, error]
+          properties:
+            scenario_status: { const: none }
+            rubric_status: { const: none }
+            error: { type: "null" }
+        - required: [scenario_status, rubric_status, error]
+          properties:
+            scenario_status: { const: running }
+            rubric_status: { const: none }
+            error: { type: "null" }
+        - required: [scenario_status, rubric_status, error]
+          properties:
+            scenario_status: { const: failed }
+            rubric_status: { const: none }
+            error: { type: string, minLength: 1, maxLength: 500 }
+        - required: [scenario_status, rubric_status, error]
+          properties:
+            scenario_status: { const: succeeded }
+            rubric_status: { const: none }
+            error: { type: "null" }
+        - required: [scenario_status, rubric_status, error]
+          properties:
+            scenario_status: { const: succeeded }
+            rubric_status: { const: running }
+            error: { type: "null" }
+        - required: [scenario_status, rubric_status, error]
+          properties:
+            scenario_status: { const: succeeded }
+            rubric_status: { const: failed }
+            error: { type: string, minLength: 1, maxLength: 500 }
+        - required: [scenario_status, rubric_status, error]
+          properties:
+            scenario_status: { const: succeeded }
+            rubric_status: { const: succeeded }
+            error: { type: "null" }
 
     GenerationAccepted:
       type: object
@@ -3331,13 +3411,13 @@ components:
     ReferenceView:
       type: object
       description: >
-        Read-only product reference (FR-KNW-009): the drill's grounded facts — frozen snapshot for
-        published drills — grouped by document with provenance. No identifiers that could support
-        mutation; no edit affordance exists (AC-KNW-004).
+        Read-only product reference (FR-KNW-009): captured grounding for an author's generated draft
+        or the answer key for a published drill, grouped by document with provenance. No identifiers
+        that could support mutation; no edit affordance exists (AC-KNW-004).
       required: [drill_id, frozen, groups, provenance]
       properties:
         drill_id: { type: string, format: uuid }
-        frozen: { type: boolean, description: True when serving a published drill's snapshot; false for an author's draft grounding in current live facts. }
+        frozen: { type: boolean, description: True when serving a published drill's answer key; false when serving an author's captured draft grounding. }
         groups:
           type: array
           items:
@@ -3360,10 +3440,11 @@ components:
           properties:
             source_documents:
               type: array
+              description: Document titles in the snapshot's document-id order.
               items: { type: string }
-            published_by: { type: string }
-            fact_count: { type: integer, minimum: 0 }
-            snapshot_at: { type: [string, "null"], format: date-time }
+            published_by: { type: string, description: Distinct publisher display names ordered by account id and joined with " · "; "—" when the snapshot has none. }
+            fact_count: { type: integer, minimum: 0, description: Sum of facts across every group. }
+            snapshot_at: { type: [string, "null"], format: date-time, description: UTC grounding-capture transaction timestamp. }
 
     # ── Knowledge ──
 

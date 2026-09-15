@@ -40,7 +40,7 @@ obligation, stated so the gate can check nothing silently fell between contract 
 | FR-KNW-004 | `PUT /product-documents/{id}/draft` (prefill = client GET of live facts; row edit/remove/add; same review step) |
 | FR-KNW-005 | `GET /product-documents/{id}/review` (`ReviewDiff`: changed/added/removed with priors + explicit replace warning) |
 | FR-KNW-006 | `POST /product-documents/{id}/publish` (T-4 atomic swap; exactly one live set by construction) |
-| FR-KNW-007 | Generation grounds in live facts (F-3 §2 `generate_*`); publish freezes the snapshot (T-5); grading and reference read the snapshot (`GET .../reference` `frozen: true`); no cross-team source can be expressed — team scope is ambient |
+| FR-KNW-007 | Scenario request captures live facts plus their version vector (T-5a); both `generate_*` jobs read that snapshot; publish requires the vector to remain current and promotes it (T-5d); grading and reference read the answer key; team scope is ambient |
 | FR-KNW-008 | Upload/extraction failure → `latest_upload.status: failed` + reason + retry; nothing reaches review |
 | FR-KNW-009 | `GET /drills/{id}/reference` + `GET /assessment/stages/{id}/reference` (`ReferenceView`: grouped facts, provenance line, zero mutation affordance in the schema) |
 | FR-KNW-010 | `DocumentSummary.draft` status marker while live facts keep serving |
@@ -53,17 +53,17 @@ obligation, stated so the gate can check nothing silently fell between contract 
 | FR-DRL-001 | `CallType`/`LeadType` schemas; lead_type iff discovery (422 otherwise) |
 | FR-DRL-002 | `POST /drills` + `PUT /drills/{id}/inputs` (library `option_id` / custom `label` entries; `GET /authoring-options`); generation 422 without ≥1 challenge and ≥1 motive |
 | FR-DRL-003 | `language` fixed `ar-EG` in every drill schema — not writable |
-| FR-DRL-004 | `POST /drills/{id}/scenario-generation` → `ScenarioView` (persona identity, context, references from published facts) + persona-derived `label` |
-| FR-DRL-005 | `ScenarioView` is read-only (no scenario-mutation endpoint exists); regeneration replaces wholesale |
-| FR-DRL-006 | `generation.{scenario,rubric}_status: failed` + `error` + re-request retry; publish blocked `409 generation-incomplete`; no fallback content path exists |
+| FR-DRL-004 | `POST /drills/{id}/scenario-generation` captures grounding and queues a request-bound job → `ScenarioView` (persona identity, context, captured-fact references) + persona-derived `label` |
+| FR-DRL-005 | `ScenarioView` is read-only; input replacement and regeneration invalidate dependent content; a worker write compares its request identity |
+| FR-DRL-006 | `generation.{scenario,rubric}_status: failed` + bounded safe `error` + re-request retry; publish blocked `409 generation-incomplete`; no fallback content path exists |
 | FR-DRL-007 | `422 not-job-relevant` with per-entry reasons at input commit — before generation (AC-DRL-004) |
-| FR-DRL-008 | `POST /drills/{id}/rubric-generation` → `RubricView` (name, weight, rationale per dimension) |
+| FR-DRL-008 | `POST /drills/{id}/rubric-generation` reads the stored scenario and captured grounding → request-bound `RubricView` (name, weight, rationale per dimension) |
 | FR-DRL-009 | `PATCH /drills/{id}/rubric/weights` + `DELETE /drills/{id}/rubric/dimensions/{id}`; live `total` returned; no add/edit-name/edit-rationale surface exists (AC-DRL-008) |
 | FR-DRL-010 | `POST /drills/{id}/publish` → `409 weights-not-100` with `meta.delta` (AC-DRL-003) |
 | FR-DRL-011 | `rubric-generation` requires `discard_confirmed: true` over an existing rubric |
 | FR-DRL-012 | `POST /calls` with `mode: test` — same live call, `attempt_id: null`, no capture, no record (F-2 §5 disposition; AC-DRL-005) |
 | FR-DRL-013 | Drafts are unpublished drills: `POST /drills` at any completeness, resume via `GET /drills/{id}`; listed only in their author's authoring surface — manager drafts in `GET /team/drills`, rep drafts in `/me/library` Created-by-me marked `status: draft` (gate F-1); no other principal's surface lists them and none can be taken (`409 drill-not-startable`) |
-| FR-DRL-014 | `POST /drills/{id}/publish` — the T-5 freeze (scenario, label, rubric, language, answer-key snapshot) |
+| FR-DRL-014 | `POST /drills/{id}/publish` — T-5d validates the grounding vector (`409 grounding-stale`), promotes the answer key, freezes content, and computes its canonical hash |
 | FR-DRL-015 | No mutation endpoint accepts a published drill (`409 drill-not-draft` everywhere); freeze guards behind (data 01 §11) |
 | FR-DRL-016 | `POST /drills/{id}/archive` — withdrawal (library/assessment/assignment) with history preserved (AC-DRL-007) |
 
@@ -143,9 +143,9 @@ obligation, stated so the gate can check nothing silently fell between contract 
 | FR-TRM-008 | `GET /team/drills` (published + drafts, status/average/count/updated) |
 | FR-TRM-009 | `GET /team/drills/{id}/stats` (rollup + leaderboard w/ replay ids — AC-TRM-004) |
 | FR-TRM-010 | `GET /drills/{id}` full basis (read-only frozen content) + test call (`mode: test`) + archive |
-| FR-TRM-011 | `PUT /drills/{id}/assignment` (recipients, due date, allowance; appears in recipients' libraries; **no email** — no E-kind exists for assignment) |
-| FR-TRM-012 | Same PUT: single-assignment upsert, fresh allowance semantics (AC-TRM-005) |
-| FR-TRM-013 | Same PUT any time; frozen content untouched by construction (assignment is not drill content) |
+| FR-TRM-011 | `GET /drills/{id}/assignment` reads the current state for editing; `PUT /drills/{id}/assignment` replaces recipients, due date, and allowance; recipients' libraries update in-app with **no email** (no E-kind exists for assignment) |
+| FR-TRM-012 | The same `PUT` is a single-assignment upsert with fresh allowance semantics (AC-TRM-005) |
+| FR-TRM-013 | `GET` preloads the editable state; `PUT` applies the replacement any time without touching frozen drill content |
 | FR-TRM-014 | `GET /team/cohorts` (four computed cohorts) |
 
 ## FR-HIR — Hiring: Manager
