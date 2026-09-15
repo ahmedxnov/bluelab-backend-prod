@@ -25,7 +25,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from bluelab.api import auth, authoring, knowledge, review, team, training
+from bluelab.api import (
+    assessment,
+    auth,
+    authoring,
+    hiring,
+    knowledge,
+    review,
+    team,
+    training,
+)
 from bluelab.modules.identity import router as identity_router
 
 PREFIX = "/api/v1"
@@ -52,3 +61,5 @@ router.include_router(review.router)
 router.include_router(team.router)
 router.include_router(knowledge.router)
 router.include_router(authoring.router)
+router.include_router(hiring.router)
+router.include_router(assessment.router)

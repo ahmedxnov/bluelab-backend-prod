@@ -1110,10 +1110,18 @@ def make_assessment(session, base_org, make_drill):
     return _make
 
 
+class _EnvelopeSealer:
+    """The T-7 DB invariants do not need a decryptable worker envelope."""
+
+    async def seal(self, plaintext, *, context):
+        return b"test-envelope"
+
+
 def _invite(position, org, team, candidates):
     async def _op(s):
         return await send_invites(
-            s, position_id=position, org_id=org, team_id=team, candidate_ids=candidates
+            s, position_id=position, org_id=org, team_id=team, candidate_ids=candidates,
+            sealer=_EnvelopeSealer(),
         )
 
     return _op

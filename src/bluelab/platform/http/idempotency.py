@@ -40,6 +40,9 @@ from datetime import timedelta
 from typing import Any, Final
 from uuid import UUID
 
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError
 
@@ -138,3 +141,74 @@ def check_replay(stored: StoredResponse | None, *, body: Any) -> StoredResponse 
     if stored.fingerprint != fingerprint(body):
         raise ProblemError(catalog.IDEMPOTENCY_KEY_REUSE)
     return stored
+
+
+async def load_replay(
+    session: AsyncSession, *, key: IdempotencyKey, body: Any
+) -> StoredResponse | None:
+    """Load and validate a live replay record under the caller's RLS scope."""
+    row = (
+        await session.execute(
+            text(
+                "select response_status,response_body,body_hash from idempotency_record "
+                "where org_id=:org and owner_account_id=:owner and endpoint=:endpoint "
+                "and key=:key and expires_at > now() for update"
+            ),
+            {
+                "org": key.org_id,
+                "owner": key.principal_id,
+                "endpoint": key.endpoint,
+                "key": key.value,
+            },
+        )
+    ).mappings().one_or_none()
+    if row is None:
+        return None
+    return check_replay(
+        StoredResponse(
+            status=int(row["response_status"]),
+            body=dict(row["response_body"]),
+            fingerprint=str(row["body_hash"]),
+        ),
+        body=body,
+    )
+
+
+async def acquire_replay_lock(session: AsyncSession, *, key: IdempotencyKey) -> None:
+    """Serialize a first use of a replay key within its transaction.
+
+    ``FOR UPDATE`` protects an existing record but cannot lock a missing one.
+    The transaction advisory lock closes that otherwise invisible first-request
+    race without broadening the lock to unrelated managers or endpoints.
+    """
+    await session.execute(
+        text("select pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": key.storage_key},
+    )
+
+
+async def store_response(
+    session: AsyncSession,
+    *,
+    key: IdempotencyKey,
+    body: Any,
+    status: int,
+    response: dict[str, Any],
+) -> None:
+    """Persist the success response in the transaction that made it true."""
+    await session.execute(
+        text(
+            "insert into idempotency_record "
+            "(org_id,owner_account_id,endpoint,key,body_hash,response_status,response_body,expires_at) "
+            "values (:org,:owner,:endpoint,:key,:hash,:status,cast(:response as jsonb),now() + interval '24 hours')"
+        ),
+        {
+            "org": key.org_id,
+            "owner": key.principal_id,
+            "endpoint": key.endpoint,
+            "key": key.value,
+            "hash": fingerprint(body),
+            "status": status,
+            "response": json.dumps(response, sort_keys=True, default=str),
+        },
+    )

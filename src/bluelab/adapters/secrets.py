@@ -28,7 +28,7 @@ from bluelab.platform.resilience import (
     call_dependency,
 )
 
-DeliverySecretPurpose = Literal["initial_credential", "password_reset_token"]
+DeliverySecretPurpose = Literal["initial_credential", "password_reset_token", "candidate_invite_token"]
 
 _LOCAL_PREFIX = b"BL1L"
 _KMS_PREFIX = b"BL1K"

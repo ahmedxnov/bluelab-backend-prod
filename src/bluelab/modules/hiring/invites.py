@@ -22,12 +22,14 @@ is a support call.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bluelab.adapters.secrets import DeliverySecretContext, SecretSealer
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError
 from bluelab.platform.ids import new_id
@@ -84,7 +86,12 @@ _INSERT_EMAIL = text(
     """
 )
 
-_EXPIRY_DAYS = text("select invite_expiry_days from position where id = :position")
+_CANDIDATES_INVITABLE = text("""select count(*) = :expected
+ from candidate where position_id=:position and id=any(:candidates) and completed_at is null""")
+_INSERT_SECRET = text("""insert into email_delivery_secret
+ (email_send_id,org_id,purpose,ciphertext,expires_at)
+ values (:email_send_id,:org_id,'candidate_invite_token',:ciphertext,
+         now() + make_interval(days=>:expiry_days))""")
 
 
 async def send_invites(
@@ -94,6 +101,9 @@ async def send_invites(
     org_id: UUID,
     team_id: UUID,
     candidate_ids: list[UUID],
+    sealer: SecretSealer,
+    expiry_days_override: int | None = None,
+    invite_template: str | None = None,
 ) -> list[IssuedInvite]:
     """Run T-7 inside the caller's transaction.
 
@@ -101,22 +111,50 @@ async def send_invites(
         ProblemError: `409 assessment-empty` if the position has no stages, or
             `409 position-closed`.
     """
+    if len(candidate_ids) != len(set(candidate_ids)):
+        raise ProblemError(catalog.VALIDATION_ERROR)
+
+    # Lock before reading stages or validating candidates. `replace_assessment`
+    # takes this same lock, making the first-invite freeze atomic with respect to
+    # stage composition without relying on timing between two statements.
+    position = (
+        await session.execute(
+            text("select status, invite_expiry_days, invite_template from position where id=:position for update"),
+            {"position": position_id},
+        )
+    ).mappings().one_or_none()
+    if position is None or position["status"] == "closed":
+        raise ProblemError(catalog.POSITION_CLOSED)
+
     has_stages = (await session.execute(_HAS_STAGES, {"position": position_id})).scalar_one()
     if not has_stages:
         # Inviting into an empty assessment would send a candidate a link to
         # nothing (FR-HIR-004).
         raise ProblemError(catalog.ASSESSMENT_EMPTY)
 
+    valid_candidates = (await session.execute(_CANDIDATES_INVITABLE, {"position": position_id, "candidates": candidate_ids, "expected": len(candidate_ids)})).scalar_one()
+    if not valid_candidates:
+        # Never issue a token for a candidate outside this manager's position or
+        # a completed assessment.  The generic denial avoids existence leakage.
+        raise ProblemError(catalog.ASSESSMENT_COMPLETED)
     frozen = await session.execute(_FREEZE_ASSESSMENT, {"position": position_id})
-    if frozen.rowcount == 0:  # type: ignore[attr-defined]  # SQLAlchemy types async execute() as Result[Any]; the UPDATE it returns is a CursorResult at runtime
+    if frozen.rowcount == 0:  # type: ignore[attr-defined]
         raise ProblemError(catalog.POSITION_CLOSED)
-
-    expiry_days = (await session.execute(_EXPIRY_DAYS, {"position": position_id})).scalar_one()
+    expiry_days = expiry_days_override if expiry_days_override is not None else int(position["invite_expiry_days"])
+    rendered_template = invite_template if invite_template is not None else position["invite_template"]
     issued: list[IssuedInvite] = []
     for candidate_id in candidate_ids:
         token_id = new_id()
         email_send_id = new_id()
         plaintext = mint_token()
+        # E2 runs asynchronously and the token hash is intentionally one-way.
+        # The only send-time copy is authenticated encryption bound to this exact
+        # ledger row, deleted on dispatch/failure/expiry.  Template override rides
+        # inside the same envelope so an edit after queueing cannot alter a send.
+        ciphertext = await sealer.seal(
+            json.dumps({"token": plaintext, "template": rendered_template}),
+            context=DeliverySecretContext(email_send_id=email_send_id, org_id=org_id, purpose="candidate_invite_token"),
+        )
         await session.execute(
             _INSERT_TOKEN,
             {
@@ -154,6 +192,7 @@ async def send_invites(
         # a duplicate (kind, dedupe_key) inserts nothing, and enqueuing for it
         # would dispatch against a row this transaction never created.
         if sent.rowcount:  # type: ignore[attr-defined]  # SQLAlchemy types async execute() as Result[Any]; the UPDATE it returns is a CursorResult at runtime
+            await session.execute(_INSERT_SECRET, {"email_send_id": email_send_id, "org_id": org_id, "ciphertext": ciphertext, "expiry_days": int(expiry_days)})
             await enqueue(
                 session,
                 Lane.DISPATCH_EMAIL,

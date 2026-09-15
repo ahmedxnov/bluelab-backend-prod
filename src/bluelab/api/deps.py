@@ -30,7 +30,8 @@ from dataclasses import replace
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
+from sqlalchemy import text
 from valkey.asyncio import Valkey
 
 from bluelab.adapters.generation_llm import (
@@ -66,7 +67,16 @@ from bluelab.platform.security.sessions import (
     SessionStore,
 )
 from bluelab.platform.security.throttle import Throttle
+from bluelab.platform.security.tokens import (
+    CandidateBinding,
+    StoredCandidateToken,
+    TokenInvalid,
+    TokenOutcome,
+    hash_token,
+    verify_candidate_token,
+)
 from bluelab.platform.security.totp import TotpReplayStore
+from bluelab.platform.telemetry import metrics
 
 GATE_PROBLEMS = {
     "first_sign_in": catalog.FIRST_SIGN_IN_REQUIRED,
@@ -484,3 +494,45 @@ def scope_of(record: SessionRecord) -> ScopeContext:
         account_id=UUID(record.account_id),
         role=Role(record.role),
     )
+
+
+async def current_candidate(
+    authorization: Annotated[str | None, Header()] = None,
+) -> CandidateBinding:
+    """Resolve an invite bearer token into its immutable candidate scope."""
+    if authorization is None or not authorization.startswith("Bearer "):
+        metrics.record_candidate_probe(kind="token_invalid")
+        raise ProblemError(catalog.TOKEN_INVALID)
+    presented = authorization[7:].strip()
+    if not presented:
+        metrics.record_candidate_probe(kind="token_invalid")
+        raise ProblemError(catalog.TOKEN_INVALID)
+    async with scoped_transaction(ScopeContext.anonymous()) as db:
+        row = (
+            await db.execute(
+                text("select * from app_candidate_token_binding(:token_hash)"),
+                {"token_hash": hash_token(presented)},
+            )
+        ).mappings().one_or_none()
+    stored = (
+        StoredCandidateToken(
+            token_hash=str(row["token_hash"]),
+            org_id=UUID(str(row["org_id"])),
+            team_id=UUID(str(row["team_id"])),
+            position_id=UUID(str(row["position_id"])),
+            candidate_id=UUID(str(row["candidate_id"])),
+            expires_at=row["expires_at"],
+            revoked=bool(row["revoked"]),
+        ) if row is not None else None
+    )
+    try:
+        return verify_candidate_token(presented, stored)
+    except TokenInvalid as exc:
+        metrics.record_candidate_probe(kind=exc.outcome.value)
+        if exc.outcome is TokenOutcome.EXPIRED and stored is not None:
+            raise ProblemError(catalog.TOKEN_EXPIRED, meta={"expired_at": stored.expires_at.isoformat()}) from None
+        raise ProblemError(catalog.TOKEN_INVALID) from None
+
+
+CandidatePrincipal = Annotated[CandidateBinding, Depends(current_candidate)]
+# A candidate capability resolved to `(org, team, position, candidate)`.

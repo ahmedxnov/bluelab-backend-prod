@@ -36,6 +36,16 @@ POSITION = REGISTRY.register(
 )
 """The candidate's own position, projected. Ops holds the transfer verb."""
 
+IDEMPOTENCY_RECORD = REGISTRY.register(
+    TablePolicy(
+        table="idempotency_record",
+        policy_class=PolicyClass.P5_OWNER_PRIVATE,
+        team_scoped=False,
+        owner_column="owner_account_id",
+    )
+)
+"""A manager can replay only their own prior batch response."""
+
 ASSESSMENT_STAGE = REGISTRY.register(
     TablePolicy(
         table="assessment_stage",
@@ -92,6 +102,7 @@ SHORTLIST_CANDIDATE = REGISTRY.register(
 they were shortlisted is the hiring org's information, not theirs."""
 
 DECLARED = (
+    IDEMPOTENCY_RECORD,
     POSITION,
     ASSESSMENT_STAGE,
     CANDIDATE,

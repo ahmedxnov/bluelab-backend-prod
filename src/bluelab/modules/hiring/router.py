@@ -1,2 +1,1 @@
-"""The HTTP routes this module owns, mounted by `bluelab.api.v1`.
-"""
+"""Hiring has no module-layer HTTP routes; ``bluelab.api.hiring`` owns them."""
