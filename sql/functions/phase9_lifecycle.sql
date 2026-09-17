@@ -353,9 +353,9 @@ set search_path = pg_catalog, public
 as $$
 begin
     insert into erasure_request(
-        id,org_id,subject_kind,subject_id,status,requested_at,executed_by,evidence)
+        id,org_id,subject_kind,subject_id,status,request_policy_reference,requested_at,executed_by,evidence)
     values(
-        p_request_id,p_org_id,p_subject_kind,p_subject_id,'pending',p_requested_at,
+        p_request_id,p_org_id,p_subject_kind,p_subject_id,'pending','subject-rights:v1',p_requested_at,
         p_executed_by,'{}'::jsonb)
     on conflict(id) do update set
         status=case when erasure_request.status='executed' then 'executed' else 'pending' end,

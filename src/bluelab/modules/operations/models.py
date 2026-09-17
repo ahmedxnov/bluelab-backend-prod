@@ -53,8 +53,12 @@ AUDIT_VERBS = (
 )
 FAULT_KINDS = ("grading_failure", "playback_asset")
 FAULT_STATUSES = ("open", "resolved")
-ERASURE_STATUSES = ("pending", "executed", "failed")
-EXPORT_STATUSES = ("pending", "ready", "delivered", "failed")
+ERASURE_STATUSES = (
+    "pending", "processing", "awaiting_input", "executed", "failed", "rejected", "withdrawn"
+)
+EXPORT_STATUSES = (
+    "pending", "processing", "awaiting_input", "ready", "delivered", "failed", "rejected", "withdrawn"
+)
 SUBJECT_KINDS = ("account", "candidate")
 
 
@@ -147,10 +151,15 @@ class ErasureRequest(UUIDPrimaryKey, Base):
 
     __tablename__ = "erasure_request"
 
-    org_id: Mapped[UUID] = mapped_column(ForeignKey("org.id"), nullable=False, index=True)
+    org_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     subject_kind: Mapped[str] = mapped_column(nullable=False)
     subject_id: Mapped[UUID] = mapped_column(nullable=False)
     status: Mapped[str] = mapped_column(nullable=False, server_default=text("'pending'"))
+    request_policy_reference: Mapped[str] = mapped_column(nullable=False)
+    response_due_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    restriction_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    closed_by: Mapped[UUID | None] = mapped_column(ForeignKey("ops_account.id"), nullable=True)
     requested_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
     executed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     executed_by: Mapped[UUID | None] = mapped_column(ForeignKey("ops_account.id"), nullable=True)
@@ -176,10 +185,16 @@ class ExportRequest(UUIDPrimaryKey, Base):
 
     __tablename__ = "export_request"
 
-    org_id: Mapped[UUID] = mapped_column(ForeignKey("org.id"), nullable=False, index=True)
+    org_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     subject_kind: Mapped[str] = mapped_column(nullable=False)
     subject_id: Mapped[UUID] = mapped_column(nullable=False)
     status: Mapped[str] = mapped_column(nullable=False, server_default=text("'pending'"))
+    request_policy_reference: Mapped[str] = mapped_column(nullable=False)
+    response_due_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    restriction_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    closed_by: Mapped[UUID | None] = mapped_column(ForeignKey("ops_account.id"), nullable=True)
     bundle_object_key: Mapped[str | None] = mapped_column(nullable=True)
     requested_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
     ready_at: Mapped[datetime | None] = mapped_column(nullable=True)

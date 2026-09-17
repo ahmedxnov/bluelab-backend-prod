@@ -264,7 +264,10 @@ class ErasureRequestView(BaseModel):
     org_id: UUID
     subject_kind: SubjectKind
     subject_id: UUID
-    status: Literal["pending", "executed", "failed"]
+    status: Literal["pending", "processing", "awaiting_input", "executed", "failed", "rejected", "withdrawn"]
+    request_policy_reference: str
+    response_due_at: datetime | None = None
+    restriction_id: UUID | None = None
     requested_at: datetime
     executed_at: datetime | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
@@ -275,7 +278,10 @@ class ExportRequestView(BaseModel):
     org_id: UUID
     subject_kind: SubjectKind
     subject_id: UUID
-    status: Literal["pending", "ready", "delivered", "failed"]
+    status: Literal["pending", "processing", "awaiting_input", "ready", "delivered", "failed", "rejected", "withdrawn"]
+    request_policy_reference: str
+    response_due_at: datetime | None = None
+    restriction_id: UUID | None = None
     requested_at: datetime
     ready_at: datetime | None = None
     expires_at: datetime | None = None

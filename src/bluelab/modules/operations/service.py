@@ -416,14 +416,15 @@ async def create_subject_request(
     values = ",:actor" if request_kind == "erasure" else ""
     await session.execute(
         text(
-            f"insert into {table}(id,org_id,subject_kind,subject_id{columns}) "
-            f"values(:id,:org,:kind,:subject{values})"
+            f"insert into {table}(id,org_id,subject_kind,subject_id,request_policy_reference{columns}) "
+            f"values(:id,:org,:kind,:subject,:policy{values})"
         ),
         {
             "id": request_id,
             "org": org_id,
             "kind": subject_kind,
             "subject": subject_id,
+            "policy": "subject-rights:v1",
             "actor": executed_by,
         },
     )

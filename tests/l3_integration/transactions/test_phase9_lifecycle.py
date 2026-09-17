@@ -69,6 +69,44 @@ class FailingObjects(MemoryObjects):
 
 
 @pytest.mark.asyncio
+async def test_subject_rights_evidence_survives_org_row_deletion(session) -> None:
+    org_id, erasure_id, export_id = new_id(), new_id(), new_id()
+    async with session.begin():
+        await session.execute(
+            text(
+                "insert into org(id,name,registered_domain,timezone,service_term_enforced) "
+                "values(:id,'Rights evidence',:domain,'Etc/UTC',false)"
+            ),
+            {"id": org_id, "domain": f"rights-{org_id}.example"},
+        )
+        await session.execute(
+            text(
+                "insert into erasure_request(id,org_id,subject_kind,subject_id,status,"
+                "request_policy_reference) values(:id,:org,'account',:subject,'processing',"
+                "'subject-rights:v1')"
+            ),
+            {"id": erasure_id, "org": org_id, "subject": new_id()},
+        )
+        await session.execute(
+            text(
+                "insert into export_request(id,org_id,subject_kind,subject_id,status,"
+                "request_policy_reference) values(:id,:org,'candidate',:subject,'awaiting_input',"
+                "'subject-rights:v1')"
+            ),
+            {"id": export_id, "org": org_id, "subject": new_id()},
+        )
+        await session.execute(text("delete from org where id=:id"), {"id": org_id})
+        assert await session.scalar(
+            text("select status from erasure_request where id=:id"), {"id": erasure_id}
+        ) == "processing"
+        assert await session.scalar(
+            text("select status from export_request where id=:id"), {"id": export_id}
+        ) == "awaiting_input"
+        await session.execute(text("delete from erasure_request where id=:id"), {"id": erasure_id})
+        await session.execute(text("delete from export_request where id=:id"), {"id": export_id})
+
+
+@pytest.mark.asyncio
 async def test_archive_withdraws_future_use_but_preserves_attempt_history(
     session, base_org, make_drill
 ) -> None:
@@ -338,7 +376,7 @@ async def test_erasure_deletes_personal_content_and_preserves_score_residue(
         await session.execute(text("insert into candidate_token(id,org_id,team_id,candidate_id,token_hash,expires_at) values(:id,:org,:team,:candidate,:hash,now()+interval '1 day')"), {"id": new_id(), "org": base_org["org"], "team": base_org["manager"], "candidate": candidate, "hash": str(new_id())})
         await session.execute(text("insert into consent_record(id,org_id,candidate_id,notice_version) values(:id,:org,:candidate,'v1')"), {"id": new_id(), "org": base_org["org"], "candidate": candidate})
         await session.execute(text("insert into terms_acceptance(id,org_id,candidate_id,terms_version,privacy_version) values(:id,:org,:candidate,'v1','v1')"), {"id": new_id(), "org": base_org["org"], "candidate": candidate})
-        await session.execute(text("insert into erasure_request(id,org_id,subject_kind,subject_id,executed_by) values(:id,:org,'candidate',:candidate,:operator)"), {"id": request, "org": base_org["org"], "candidate": candidate, "operator": operator})
+        await session.execute(text("insert into erasure_request(id,org_id,subject_kind,subject_id,request_policy_reference,executed_by) values(:id,:org,'candidate',:candidate,'subject-rights:v1',:operator)"), {"id": request, "org": base_org["org"], "candidate": candidate, "operator": operator})
         await execute_erasure(session, request_id=request, ledger=ledger, object_store=objects)
     async with session.begin():
         candidate_row = (await session.execute(text("select * from candidate where id=:id"), {"id": candidate})).mappings().one()
@@ -375,8 +413,8 @@ async def test_retention_cutoffs_and_object_failure_rollback(session, base_org) 
         )
         await session.execute(
             text(
-                "insert into export_request(id,org_id,subject_kind,subject_id,status,bundle_object_key,ready_at,expires_at) "
-                "values(:id,:org,'account',:subject,'ready',:key,now()-interval '8 days',now()-interval '1 day')"
+                "insert into export_request(id,org_id,subject_kind,subject_id,status,request_policy_reference,bundle_object_key,ready_at,expires_at) "
+                "values(:id,:org,'account',:subject,'ready','subject-rights:v1',:key,now()-interval '8 days',now()-interval '1 day')"
             ),
             {"id": export, "org": base_org["org"], "subject": base_org["manager"], "key": ref.key},
         )
@@ -426,8 +464,8 @@ async def test_restore_reopens_executed_request_if_personal_data_remains(
         )
         await session.execute(
             text(
-                "insert into erasure_request(id,org_id,subject_kind,subject_id,status,executed_by) "
-                "values(:id,:org,'account',:subject,'executed',:actor)"
+                "insert into erasure_request(id,org_id,subject_kind,subject_id,status,request_policy_reference,executed_by) "
+                "values(:id,:org,'account',:subject,'executed','subject-rights:v1',:actor)"
             ),
             {"id": request, "org": base_org["org"], "subject": account, "actor": operator},
         )
