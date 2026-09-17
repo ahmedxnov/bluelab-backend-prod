@@ -36,13 +36,13 @@ def _wrong_code() -> str:
     return valid[:-1] + str((int(valid[-1]) + 1) % 10)
 
 
-async def _sign_in(client, world):
+async def _sign_in(client, world, code: str | None = None):
     return await client.post(
         "/ops/v1/session",
         json={
             "email": world.email,
             "password": OPS_PASSWORD,
-            "totp_code": _code(),
+            "totp_code": code or _code(),
         },
     )
 
@@ -71,7 +71,8 @@ async def test_ops_requires_password_and_non_replayed_totp_in_separate_cookie(
     for response in (wrong_password, wrong_totp):
         assert response.json()["type"].endswith("/invalid-credentials")
 
-    accepted = await _sign_in(ops_client, ops_world)
+    replayed_code = _code()
+    accepted = await _sign_in(ops_client, ops_world, replayed_code)
     assert accepted.status_code == 200
     assert accepted.json()["ops_account_id"] == str(ops_world.ops_account_id)
     cookie = accepted.headers["set-cookie"]
@@ -83,7 +84,7 @@ async def test_ops_requires_password_and_non_replayed_totp_in_separate_cookie(
     assert "Domain=" not in cookie
     assert CUSTOMER_COOKIE not in cookie
 
-    replay = await _sign_in(ops_client, ops_world)
+    replay = await _sign_in(ops_client, ops_world, replayed_code)
     assert replay.status_code == 401
     assert replay.json()["type"].endswith("/invalid-credentials")
 

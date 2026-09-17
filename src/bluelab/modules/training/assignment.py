@@ -82,6 +82,18 @@ _RECIPIENTS = text(
     """
 )
 
+_LOCK_MANAGEABLE_DRILL = text(
+    """
+    select d.status
+      from drill d
+     where d.id = :drill_id
+       and d.org_id = :org_id
+       and d.team_id = :team_id
+       and not d.self_authored
+     for update
+    """
+)
+
 _CURRENT_ASSIGNMENT = text(
     """
     select a.id, a.drill_id, a.due_date, a.attempts_allowed, a.updated_at
@@ -199,7 +211,7 @@ async def put_assignment(
     scope = {"org_id": org_id, "team_id": team_id}
 
     drill = (
-        await session.execute(_MANAGEABLE_DRILL, {**scope, "drill_id": drill_id})
+        await session.execute(_LOCK_MANAGEABLE_DRILL, {**scope, "drill_id": drill_id})
     ).one_or_none()
     if drill is None:
         raise ProblemError(catalog.NOT_FOUND)

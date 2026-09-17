@@ -84,7 +84,7 @@ async def enqueue(
         session: The session of the domain transaction in progress. Passing a
             different session — or calling after the commit — reintroduces the
             outbox problem this design exists to avoid.
-        lane: One of the six. A name outside the catalogue is refused.
+        lane: One of the eight. A name outside the catalogue is refused.
         payload: Ids only. Validated, not trusted.
         org_id: The scope the worker will resolve from the job row. Required:
             the work plane gets no unscoped path (ADR-0005, ADR-0031).

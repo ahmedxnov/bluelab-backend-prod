@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bluelab.platform.db.privileged import system_scope
 from bluelab.platform.db.scope import ScopeContext
-from bluelab.platform.db.session import scoped_transaction
+from bluelab.platform.db.session import org_service_access_allowed, scoped_transaction
 from bluelab.platform.queue.catalog import Lane
 from bluelab.platform.queue.compat import JobEnvelope, read
 from bluelab.platform.telemetry import correlation
@@ -42,6 +42,10 @@ from bluelab.platform.telemetry import correlation
 def scope_from_envelope(job: JobEnvelope) -> ScopeContext:
     """Build the worker's scope context from the job envelope."""
     return system_scope(org_id=job.org_id, team_id=job.team_id)
+
+
+class OrganizationWorkSuspended(Exception):
+    """An ordinary queued job cannot run outside its organization's service term."""
 
 
 @asynccontextmanager
@@ -86,4 +90,9 @@ async def job_transaction(
     )
 
     async with scoped_transaction(scope) as session:
+        ordinary = lane not in {Lane.EXECUTE_ERASURE, Lane.EXECUTE_EXPORT}
+        if ordinary and not await org_service_access_allowed(session):
+            raise OrganizationWorkSuspended
         yield session, envelope
+        if ordinary and not await org_service_access_allowed(session):
+            raise OrganizationWorkSuspended

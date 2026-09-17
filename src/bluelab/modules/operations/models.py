@@ -31,6 +31,18 @@ from bluelab.platform.db.types import SNAPSHOT_TYPE
 OPS_STATUSES = ("active", "deactivated")
 AUDIT_VERBS = (
     "provision_org",
+    "confirm_org_term",
+    "renew_org_term",
+    "start_org_offboarding",
+    "cancel_org_offboarding",
+    "extend_org_deadline",
+    "create_org_deletion_restriction",
+    "release_org_deletion_restriction",
+    "record_post_completion_restriction",
+    "revise_org_retention_policy",
+    "inspect_org_purge_evidence",
+    "resolve_org_purge_fault",
+    "resolve_subject_request",
     "provision_account",
     "deactivate_account",
     "change_team_mapping",
@@ -76,7 +88,7 @@ class OpsAudit(UUIDPrimaryKey, Base):
 
     ops_account_id: Mapped[UUID] = mapped_column(ForeignKey("ops_account.id"), nullable=False)
     verb: Mapped[str] = mapped_column(nullable=False)
-    target_org_id: Mapped[UUID | None] = mapped_column(ForeignKey("org.id"), nullable=True)
+    target_org_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
     target_ref: Mapped[dict[str, Any]] = mapped_column(
         SNAPSHOT_TYPE, nullable=False, server_default=text("'{}'")
@@ -176,4 +188,46 @@ class ExportRequest(UUIDPrimaryKey, Base):
     __table_args__ = (
         enum_check("subject_kind", SUBJECT_KINDS),
         enum_check("status", EXPORT_STATUSES),
+    )
+
+
+class OrgLifecycleOperation(UUIDPrimaryKey, Timestamped, Base):
+    """Pending decision fence and replay identity for lifecycle commands."""
+
+    __tablename__ = "org_lifecycle_operation"
+
+    org_id: Mapped[UUID] = mapped_column(nullable=False)
+    service_term_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    offboarding_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    action: Mapped[str] = mapped_column(nullable=False)
+    expected_sequence: Mapped[int] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(nullable=False, server_default=text("'pending'"))
+    actor_ops_account_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("ops_account.id"), nullable=True
+    )
+    reason: Mapped[str] = mapped_column(nullable=False)
+    retention_policy_reference: Mapped[str | None] = mapped_column(nullable=True)
+    requested_deadline: Mapped[datetime | None] = mapped_column(nullable=True)
+    restriction_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    command_payload: Mapped[dict[str, Any]] = mapped_column(
+        SNAPSHOT_TYPE, nullable=False, server_default=text("'{}'")
+    )
+    command_digest: Mapped[str | None] = mapped_column(nullable=True)
+    resulting_sequence: Mapped[int | None] = mapped_column(nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    __table_args__ = (
+        enum_check("status", ("pending", "applied", "rejected")),
+        enum_check(
+            "action",
+            (
+                "confirm_term", "renew_term", "expire_term", "start", "cancel", "extend",
+                "policy_revision", "create_restriction", "release_restriction", "claim",
+                "authorize_destructive_step", "complete", "record_post_completion_restriction",
+            ),
+        ),
+        Index(
+            "uq_org_lifecycle_pending", "org_id", unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
     )

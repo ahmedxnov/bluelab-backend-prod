@@ -69,4 +69,16 @@ EXPORT_REQUEST = REGISTRY.register(
     )
 )
 
-DECLARED = (OPS_ACCOUNT, OPS_AUDIT, OPS_FAULT, ERASURE_REQUEST, EXPORT_REQUEST)
+ORG_LIFECYCLE_OPERATION = REGISTRY.register(
+    TablePolicy(
+        table="org_lifecycle_operation",
+        policy_class=PolicyClass.P9_OPS,
+        org_scoped=True,
+        team_scoped=False,
+    )
+)
+
+DECLARED = (
+    OPS_ACCOUNT, OPS_AUDIT, OPS_FAULT, ERASURE_REQUEST, EXPORT_REQUEST,
+    ORG_LIFECYCLE_OPERATION,
+)

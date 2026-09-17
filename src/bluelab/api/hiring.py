@@ -237,3 +237,23 @@ async def send_shortlist(position_id: UUID, payload: ShortlistSend, record: Mana
         response = jsonable_encoder({"shortlist_id":shortlist_id,"included_candidate_ids":payload.candidate_ids})
         await store_response(db, key=key, body=body, status=202, response=response)
         return JSONResponse(response, status_code=202)
+
+
+@router.post(
+    "/positions/{position_id}/close",
+    operation_id="closePosition",
+    response_model=PositionDetail,
+)
+async def close_position(
+    position_id: UUID, record: ManagerPrincipal
+) -> dict[str, object]:
+    """Close a position, revoke outstanding tokens, and retain its archive."""
+    async with scoped_transaction(scope_of(record)) as db:
+        visible = await db.execute(
+            text("select id from position where id=:position for update"),
+            {"position": position_id},
+        )
+        if visible.scalar_one_or_none() is None:
+            raise not_found()
+        await shortlist.close_position(db, position_id=position_id)
+        return await service.position_detail(db, position_id)

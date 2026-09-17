@@ -135,7 +135,7 @@ async def reconcile_recording(
     if changed and not available:
         await session.execute(
             text("""insert into ops_fault(id,org_id,kind,attempt_id,detail)
-                      select :id,:org,'playback_asset',:attempt,'recording unavailable'
+                      select :id,:org,'playback_asset',:attempt,'{}'::jsonb
                        where not exists(select 1 from ops_fault where kind='playback_asset'
                          and attempt_id=:attempt and status='open')"""),
             {"id": new_id(), "org": call.org_id, "attempt": call.attempt_id},
@@ -151,6 +151,17 @@ async def attempt_status(session: AsyncSession, call: CallSession) -> str | None
     return (
         await session.execute(
             text("select status from attempt where id=:attempt"),
+            {"attempt": call.attempt_id},
+        )
+    ).scalar_one_or_none()
+
+
+async def recording_status(session: AsyncSession, call: CallSession) -> str | None:
+    if call.attempt_id is None:
+        return None
+    return (
+        await session.execute(
+            text("select recording_status from attempt where id=:attempt"),
             {"attempt": call.attempt_id},
         )
     ).scalar_one_or_none()

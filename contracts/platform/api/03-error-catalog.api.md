@@ -72,6 +72,20 @@ successful `200` whose status field reads as preparing, [FR-SCR-009](../specs/14
 | `token-expired` | 401 | Past expiry, unused or mid-assessment — **with the expiry explanation** the spec requires ([FR-IDA-013](../specs/10-identity-and-access.spec.md), [AC-IDA-004](../specs/10-identity-and-access.spec.md), [FR-CND-011](../specs/23-candidate-flow.spec.md)) | `meta.expired_at` |
 | `assessment-completed` | 409 | A completed candidate's token calls anything except `GET /assessment` (which serves the completion state, [FR-IDA-013](../specs/10-identity-and-access.spec.md), [FR-CND-008](../specs/23-candidate-flow.spec.md)) | |
 | `preflight-required` | 409 | Stage/call access before pre-flight passed + consent + terms ([FR-CND-002](../specs/23-candidate-flow.spec.md)/[003](../specs/23-candidate-flow.spec.md)) | `meta.missing` lists failed elements |
+| `organization-suspended` | 403 | Valid account or candidate capability belongs to an organization before its confirmed start, at or after its service end, or in offboarding or purging | New ordinary reads, token exchange, resend, and writes are refused; the client clears organization caches |
+
+### 2.3a Organization lifecycle operations
+
+| `type` slug | Status | When | Retry? |
+|---|---|---|---|
+| `lifecycle-sequence-stale` | 409 | A new operation names an earlier authoritative sequence | Refresh the lifecycle view and submit a new operation id after review |
+| `service-term-invalid` | 422 | The explicit last access date precedes the start date, a local boundary cannot be resolved, or the period input is invalid | Correct the dates, zone, or period and confirm the displayed UTC boundaries |
+| `offboarding-episode-stale` | 409 | An operation or job names an episode other than the current one | No; inspect the current episode |
+| `purge-already-claimed` | 409 | Renewal, cancellation, or deadline extension arrives after claim | No |
+| `operation-id-reuse` | 409 | A recorded operation id is used with a different command | Use a new id for a new decision |
+| `retention-policy-unverified` | 503 | The current contractual policy or its authoritative head cannot be verified | Retry with the same operation id after reconciliation |
+| `lifecycle-history-unverified` | 503 | The lifecycle history or independent completeness reference is unavailable or stale | Retry with the same operation id after reconciliation |
+| `offboarding-quiescence-pending` | 503 | An established room, participant, or capture disposition cannot be verified terminated or accounted for | Inspect the affected call; access remains closed and purge claim waits for reconciliation |
 
 ### 2.4 Call admission & call plane
 
@@ -129,6 +143,7 @@ successful `200` whose status field reads as preparing, [FR-SCR-009](../specs/14
 | `duplicate-email` | 409 | An email already exists in the target container — ops provisioning (platform-wide username, [data 01 §2](../data/01-schema.data.md)) and `POST /hr-contacts` (already in the manager's saved list). One condition class, one type (gate F-8) | |
 | `fault-already-resolved` | 409 | Resolving a resolved fault | |
 | `subject-unknown` | 404 | Erasure/export subject id not found in the named org | |
+| `source-unavailable` | 409 | A request after partial or completed purge needs source data already verified removed | Answer from retained evidence; do not imply recoverability |
 
 ### 2.8 Integration
 

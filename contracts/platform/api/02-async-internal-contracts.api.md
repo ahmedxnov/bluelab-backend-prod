@@ -181,19 +181,43 @@ what makes retries safe.
 | `extract_facts` | `{upload_id}` | `document_upload.status` transition `received→extracting→extracted|failed`; re-run of a terminal upload is a no-op | `POST /product-documents/{id}/uploads` | On failure/empty: `status='failed'` + reason; nothing reaches review; live facts untouched ([FR-KNW-008](../specs/11-knowledge.spec.md)). Retry = new upload POST re-running extraction on the same stored object |
 | `render_report` | `{candidate_id}` | `candidate_report` upsert keyed on `candidate_id`; PDF render conditional on `pdf_status in (none,failed)` | Candidate completion (T-2 candidate variant); `POST /candidates/{id}/report/render` (manager retry when `failed`) | On failure: `pdf_status='failed'`; report view still renders from data ([FR-HIR-011](../specs/22-hiring-manager.spec.md)); takeaway synthesis via C-6 inside this job ([00-overview.arch §3.3](../architecture/00-overview.arch.md)) |
 | `dispatch_email` | `{email_send_id}` | `email_send (kind, dedupe_key)` unique — at most one send per (recipient, event) ([04-deps §2.6](../architecture/04-dependencies-and-capabilities.arch.md)) | T-7 (invites), T-9 (shortlist), account provisioning, completion/decision events per policy | Backoff retry; terminal failure sets `email_send.status='failed'`; E-2 delivery state feeds the pipeline view ([FR-HIR-010](../specs/22-hiring-manager.spec.md)) |
+| `execute_erasure` | `{request_id}` | `erasure_request.id`; a write-once replay marker arms the request before mutation, the database procedure is idempotent over the erasure matrix, object deletes are idempotent by exact key, and zero-remain verification converges on replay | Accepted `pending` request with its source-data restriction | Sets `processing`; retryable failure leaves `failed` with its fence and restriction in force; verified success sets `executed`, `executed_at`, and per-category evidence ([SEC-018](../specs/02-security-requirements.spec.md)) |
+| `execute_export` | `{request_id}` | `export_request.id` and the fixed object key `exports/{request_id}.zip`; assembly replaces that exact object and the ready transition is conditional on `processing` | Accepted `pending` request with its source-data restriction | Sets `processing`; retryable failure leaves `failed` and the restriction in force; success sets `ready`, `ready_at`, `expires_at`, and the fixed bundle key until delivery obligations resolve |
+
+The job catalogue above contains eight contracted job kinds. The organization term-transition job is
+enabled with service-date access enforcement. The organization-purge jobs remain disabled until the
+[offboarding enablement conditions](../data/03-lifecycle-retention-erasure.data.md) pass:
+
+| Job | Payload | Cadence and identity | Failure contract |
+|---|---|---|---|
+| `transition_due_org_terms` | `{}` | Hourly set-based scan of current service terms whose persisted end instant has passed; one stable transition per `(org_id, service_term_id)` | A missed scan is retried; the expired term remains discoverable. The service-date gate refuses ordinary access throughout any delay. |
+| `discover_org_purges` | `{}` | Hourly set-based scan; one queued job per eligible `(org_id, offboarding_id)` | A missed scan is retried; eligible episodes remain discoverable. |
+| `execute_org_purge` | `{org_id, offboarding_id}` | One durable run per episode; each bounded step uses its run, step, and batch identity | Restriction pauses further authorization; transient failures back off from five minutes to one hour; five failures or 24 hours without progress requires attention. |
+| `recover_org_purges` | `{}` | Every 15 minutes, independently scans incomplete runs, including runs with no live organization row | Re-inventory uncertain batches and reconcile independent evidence before resuming. |
+
+Procrastinate is the sole organization-lifecycle scheduler and purge executor: term transition records an
+episode from the persisted service end rather than execution time; set-based discovery selects eligible
+offboarding episodes; an organization-specific job carries the stable organization and episode
+identifiers; claim rechecks current deadline, restrictions, permitted work, and pending lifecycle
+decisions; incomplete purge runs remain discoverable for recovery. The concrete queue
+payloads and step identities above follow the version-N/N+1 compatibility rule. Ordinary
+workers enforce the organization service-date and lifecycle gates at their write boundary and reject work
+outside the current term or for an offboarding or purging organization; narrowly authorized hold-period and
+purge work uses guarded paths.
 
 Worker concurrency, queue depth alarms, and dead-letter handling are Phase 7/11 concerns; the contract
 here is payload + identity + failure surface.
 
-The physical generation state is one lane on `drill`: `generation_kind`, `generation_status`,
-`generation_request_id`, and `generation_error` ([data 01 §4](../data/01-schema.data.md)). The HTTP
-`GenerationState` projection derives `scenario_status` from the physical status while the active kind is
-`scenario`, otherwise `succeeded` when `scenario` exists and `none` when it does not. It derives
-`rubric_status` the same way from active kind `rubric` and the existence of rubric rows. `error` carries the
-bounded safe reason only for the active failed kind and is `null` otherwise. Request identity remains
-internal. Replacing inputs resets the lane and invalidates both outputs; requesting scenario generation
-invalidates both outputs; requesting rubric generation invalidates the rubric. Every displaced worker sees
-a request mismatch and completes as a no-op.
+The physical generation state is two stage-specific state pairs on `drill`:
+`scenario_generation_status`/`scenario_generation_request_id` and
+`rubric_generation_status`/`rubric_generation_request_id`, with one shared `generation_error`
+([data 01 §4](../data/01-schema.data.md)). A database constraint permits at most one running stage. The HTTP
+`GenerationState` projection reads the two statuses directly. Replacing inputs resets both stages and
+invalidates both outputs; requesting scenario generation sets the scenario stage to `running` and resets the
+rubric stage; requesting rubric generation requires a succeeded scenario and sets only the rubric stage to
+`running`. `error` carries the bounded safe reason for the failed stage and is `null` otherwise. Request
+identities remain internal. Every displaced worker sees a stage-specific request mismatch and completes as a
+no-op.
 
 E-1 issuance atomically persists the credential or reset-token hash, `email_send`, its
 `email_delivery_secret` authenticated-encryption envelope, and the `{email_send_id}` job. The dispatcher
@@ -238,10 +262,27 @@ correct RTL rendering (C-9 obligation, [ADR-0021](../stack/adr/0021-pdf-chromium
 ## 5. Subject-rights execution — erasure and export
 
 Triggered only from the ops surface (`/ops/v1/erasure-requests`, `/ops/v1/export-requests` —
-[openapi.yaml](openapi.yaml)); executed by the dedicated procedures that are the **only sanctioned
-writers through the freeze guards** ([ADR-0033](../data/adr/0033-erasure-anonymize-redact-delete.md),
+[openapi.yaml](openapi.yaml)); executed by dedicated subject-rights procedures, with the
+organization-purge batch path authorized separately ([ADR-0033](../data/adr/0033-erasure-anonymize-redact-delete.md),
 [data 03 §3–4](../data/03-lifecycle-retention-erasure.data.md)). The interface contract: requests carry
 `{org_id, subject_kind, subject_id, reason}`; status is polled on the request resource
-(`pending → executed|failed`, export additionally `ready` with a time-limited bundle URL); evidence
+(`pending → processing → executed|failed` for erasure; export additionally reaches `ready` and
+`delivered`; `awaiting_input`, `rejected`, and `withdrawn` follow the recorded request policy); evidence
 counts land on the request row. Erasure reaches the object store (recordings, PDFs, bundles) as well as
 rows — [CMP-001](../specs/01-nfr-and-compliance.spec.md)'s full reach.
+
+Acceptance of either request that needs source data records an applicable deletion restriction in
+the lifecycle history before its job can be authorized. Creating either request transactionally
+enqueues its job by `request_id` after that restriction is applied. An `awaiting_input` request has
+a recorded response deadline and remains restricted until an authorized, audited closure.
+Any erasure request is a durable
+work fence for its subject, including a failed request: subject-related grading, report, generation, and email
+workers reject the subject while the fence exists. `execute_erasure` writes the request's replay marker to the
+independent compliance ledger before it invokes the database procedure, waits for or cancels already-claimed
+subject work, deletes the exact object keys returned by the procedure, performs category-by-category
+zero-remain verification, and only then marks the request executed. A ledger-write failure leaves the request
+pending and permits no erasure mutation. Restore reconciliation recreates missing request rows from the
+ledger when their organization remains live. When a verified organization purge removes the organization,
+independent evidence records the subject-erasure outcome for its proven overlapping scope and remaining
+obligations still execute. Joint replay finishes before ordinary workers resume
+([data 05 §4](../data/05-backup-and-disaster-recovery.data.md)).

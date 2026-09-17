@@ -167,8 +167,8 @@ async def world(auth_engine, clean_legal_catalog) -> World:
     async with maker() as s, s.begin():
         await s.execute(
             text(
-                "insert into org (id, name, registered_domain, timezone)"
-                " values (:id, 'Auth Org', 'example.com', 'Africa/Cairo')"
+                "insert into org (id, name, registered_domain, timezone, service_term_enforced)"
+                " values (:id, 'Auth Org', 'example.com', 'Africa/Cairo', false)"
             ),
             {"id": ids["org"]},
         )

@@ -119,6 +119,16 @@ model_version_observed = _meter.create_counter(
 ops_break_glass = _meter.create_counter(
     "ops.break_glass", description="Every break-glass use — pages on any value (SEC-014)"
 )
+lifecycle_sweep = _meter.create_counter(
+    "lifecycle.sweep", description="Retention sweep rows by closed class and outcome"
+)
+stale_recording_sweep = _meter.create_counter(
+    "lifecycle.stale_recording_sweep",
+    description="Database-backed stale recording sweep outcomes",
+)
+erasure_category = _meter.create_counter(
+    "lifecycle.erasure_category", description="Content-free erasure category counts"
+)
 
 
 class AuthSignal(StrEnum):
@@ -277,3 +287,38 @@ def record_dependency(*, dependency: str, outcome: str, duration_ms: float) -> N
 def record_break_glass(*, verb: str) -> None:
     """One break-glass use. Pages on any value at all (SEC-014)."""
     ops_break_glass.add(1, _labels(verb=verb))
+
+
+def record_lifecycle_sweep(
+    *, retention_class: str, outcome: str, rows: int
+) -> None:
+    if retention_class not in {"RC-3", "RC-4", "RC-5", "RC-6", "RC-8", "RC-9"}:
+        raise ValueError("retention class is outside the closed inventory")
+    lifecycle_sweep.add(rows, _labels(retention_class=retention_class, outcome=outcome))
+
+
+def record_stale_recording_sweep(*, outcome: str, rows: int) -> None:
+    if outcome not in {"success", "failed"} or rows < 0:
+        raise ValueError("stale recording sweep outcome is outside the closed inventory")
+    stale_recording_sweep.add(1, _labels(outcome=outcome))
+    if outcome == "success":
+        for _ in range(rows):
+            record_call_recovery(outcome="recording_unavailable")
+
+
+def record_erasure_category(*, category: str, count: int) -> None:
+    if category not in {
+        "attempts_preserved",
+        "moments_deleted",
+        "transcripts_deleted",
+        "scorecards_redacted",
+        "dimension_scores_redacted",
+        "tokens_deleted",
+        "consent_deleted",
+        "terms_deleted",
+        "feedback_deleted",
+        "badges_deleted",
+        "objects_deleted",
+    }:
+        raise ValueError("erasure category is outside the closed inventory")
+    erasure_category.add(count, _labels(category=category))

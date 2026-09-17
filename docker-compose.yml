@@ -83,6 +83,10 @@ services:
       - |
         mc --config-dir /tmp/.mc alias set local http://minio:9000 bluelab bluelabbluelab
         mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-local
+        mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-lifecycle-history
+        mc --config-dir /tmp/.mc version enable local/bluelab-lifecycle-history
+        mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-erasure-ledger
+        mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-erasure-ledger-backup
     read_only: true
     tmpfs: ["/tmp:size=16m,mode=1777"]
     cap_drop: ["ALL"]
@@ -166,6 +170,7 @@ services:
     environment:
       BLUELAB_PLANE: worker
       BLUELAB_ENV: local
+      TZ: Etc/UTC
       DATABASE_URL: postgresql+asyncpg://bluelab_app:bluelab@postgres:5432/bluelab # pragma: allowlist secret -- disposable local Compose credential
       VALKEY_URL: redis://valkey:6379/0
       OBJECT_STORE_ENDPOINT: http://minio:9000

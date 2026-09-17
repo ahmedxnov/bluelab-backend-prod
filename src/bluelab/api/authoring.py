@@ -7,7 +7,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Query, status
 
-from bluelab.api.deps import CurrentPrincipal, GenerationProviderDep, scope_of
+from bluelab.api.deps import (
+    CurrentPrincipal,
+    GenerationProviderDep,
+    ManagerPrincipal,
+    scope_of,
+)
 from bluelab.modules.drills import freeze, service
 from bluelab.modules.drills.schemas import (
     AuthoringOptionList,
@@ -237,6 +242,32 @@ async def publish_drill(drill_id: UUID, record: CurrentPrincipal) -> DrillFull:
             team_id=team,
             viewer_id=viewer,
             is_manager=manager,
+        )
+
+
+@router.post(
+    "/drills/{drill_id}/archive",
+    operation_id="archiveDrill",
+    response_model=DrillFull,
+)
+async def archive_drill(drill_id: UUID, record: ManagerPrincipal) -> DrillFull:
+    org, team, viewer, _ = _scope(record)
+    async with scoped_transaction(scope_of(record)) as db:
+        await service.archive_drill(
+            db,
+            drill_id=drill_id,
+            org_id=org,
+            team_id=team,
+            viewer_id=viewer,
+        )
+    async with scoped_transaction(scope_of(record)) as db:
+        return await service.get_full(
+            db,
+            drill_id=drill_id,
+            org_id=org,
+            team_id=team,
+            viewer_id=viewer,
+            is_manager=True,
         )
 
 

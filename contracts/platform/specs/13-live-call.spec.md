@@ -1,6 +1,6 @@
 # 13 — Live Call
 
-**Responsibility:** the pre-call brief and the live call itself, for every participant type (rep, candidate, author on a test call) — in-call surfaces, capture, how a call ends (participant, buyer, or the platform maximum), interruption handling, and the hand-off to grading. It does not own the drill content it renders ([12](12-drill-lifecycle.spec.md)), grading or any post-call artifact ([14](14-scoring-and-review.spec.md)), the journeys around the call ([20](20-training-rep.spec.md)/[22](22-hiring-manager.spec.md)/[23](23-candidate-flow.spec.md)), or consent capture points ([10](10-identity-and-access.spec.md), [CMP-002](01-nfr-and-compliance.spec.md)).
+**Responsibility:** the pre-call brief and the live call itself, for every participant type (rep, candidate, author on a test call) — in-call surfaces, capture, call endings, interruption handling, organization suspension during an established call, and the hand-off to grading.
 
 ## Overview
 
@@ -56,6 +56,9 @@ When a rep's or author's call is interrupted, the attempt shall be void with no 
 ### FR-LIV-016: Failure to establish `[Must]`
 When a requested call fails to establish (the voice path cannot start), the system shall report the failure with a retry available, and no attempt shall be recorded or consumed by the failure.
 
+### FR-LIV-017: Organization suspension during a call `[Must]`
+At the confirmed service end instant, new call admission and reconnection for that organization shall stop independently of the term-transition job. Established rooms shall terminate and disconnect their participants; ordinary writes and capture after the cutoff are fenced while the room and partial-object disposition is reconciled. For an operator's immediate early termination, the pending decision fences admission and every established room terminates before that decision is accepted. Rep and candidate attempts take the interrupted T-6 disposition: reps regain their allowance, and candidates follow the one-restart rule. Test calls discard capture and leave no attempt. A grant that has not established a room takes the never-established compensation. The control stops egress, registers any partial object by exact key for eventual purge, and verifies room and capture disposition. An uncertain result keeps the affected path isolated and blocks purge claim. Expiry of the initial join credential is not evidence that an established call has ended. While organization suspension applies, no call may reconnect or create ordinary organization writes.
+
 ## NFR & compliance references
 
 Turn latency: [NFR-001](01-nfr-and-compliance.spec.md). Concurrency: [NFR-002](01-nfr-and-compliance.spec.md). Call availability: [NFR-003](01-nfr-and-compliance.spec.md). Transcript-complete-at-end feeds [NFR-005](01-nfr-and-compliance.spec.md). Consent: [CMP-002](01-nfr-and-compliance.spec.md). Browser/microphone support: [NFR-007](01-nfr-and-compliance.spec.md).
@@ -109,7 +112,15 @@ When a call start is requested from the other link
 Then it is refused with an explanation
 And the live call continues unaffected.
 
+### AC-LIV-009: Offboarding fences an established call
+Given an established call in an organization entering offboarding
+When the operator initiation is accepted
+Then the room terminates, the participant disconnects, and reconnection is denied
+And capture already created is tracked for retention and purge
+And rep and candidate attempts are interrupted before the decision while test calls leave no attempt
+And partial capture is registered by exact key for retention and purge.
+
 ## Provenance
 
 - Brief layout and call-type variants: walkthroughs A1.5a/b/f/g, C1.5b; author recap: A1.5h. Live-call surfaces, focus mode, end-call confirm: A2, C2. Start-only-via-brief: A3.5 ("practice again" routes to the brief), A1.6/C1.6 ("start call" from the reference).
-- Natural buyer-driven ending, the 15-minute platform maximum, interruption policies, the reconnection grace, and the one-live-call rule: product decisions recorded in this file.
+- Natural buyer-driven ending, the 15-minute platform maximum, interruption policies, the reconnection grace, the one-live-call rule, and the organization-suspension boundary: product decisions recorded in this file.

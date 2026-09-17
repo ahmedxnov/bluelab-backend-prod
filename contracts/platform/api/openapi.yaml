@@ -122,7 +122,7 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "403":
-          description: "Problem type: account-deactivated."
+          description: "Problem types: account-deactivated, organization-suspended."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -137,6 +137,7 @@ paths:
         boot and routes to the gate screen while any gate is pending.
       operationId: getSession
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Current principal.
           content:
@@ -149,6 +150,7 @@ paths:
       summary: Sign out
       operationId: signOut
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "204":
           description: Session destroyed; cookie cleared.
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -172,6 +174,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/FirstSignInRequest" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Gate complete; session fully established.
           content:
@@ -206,6 +209,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/AcceptancesRequest" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Gates cleared.
           content:
@@ -289,6 +293,7 @@ paths:
           description: Scope the weekly trend line to one call type (FR-TRP-001).
           schema: { $ref: "#/components/schemas/CallType" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Progress home payload.
           content:
@@ -307,6 +312,7 @@ paths:
         (FR-TRP-005). Badges are visible only to their owner.
       operationId: getMyProfile
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Profile payload.
           content:
@@ -325,6 +331,7 @@ paths:
         - $ref: "#/components/parameters/CursorParam"
         - $ref: "#/components/parameters/LimitParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Feed page plus unread count.
           content:
@@ -349,6 +356,7 @@ paths:
               properties:
                 through_id: { type: string, format: uuid }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Updated unread count.
           content:
@@ -398,6 +406,7 @@ paths:
         - $ref: "#/components/parameters/CursorParam"
         - $ref: "#/components/parameters/LimitParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Library page with per-tab counts.
           content:
@@ -418,6 +427,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: History payload.
           content:
@@ -440,6 +450,7 @@ paths:
           in: query
           schema: { type: string, enum: [challenge, hidden_motive] }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Active options.
           content:
@@ -472,6 +483,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/DrillInputs" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "201":
           description: Draft created (FR-DRL-013 — resumable at any completeness).
           content:
@@ -499,6 +511,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Full drill.
           content:
@@ -526,6 +539,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/DrillInputs" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Inputs replaced.
           content:
@@ -561,6 +575,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "202":
           description: Generation queued; poll GET /drills/{drill_id}.
           content:
@@ -605,6 +620,7 @@ paths:
                   type: boolean
                   description: Required true when regenerating over an existing rubric (FR-DRL-011).
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "202":
           description: Generation queued; poll GET /drills/{drill_id}.
           content:
@@ -653,6 +669,7 @@ paths:
                       dimension_id: { type: string, format: uuid }
                       weight: { type: integer, minimum: 0, maximum: 100 }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Updated rubric with live total.
           content:
@@ -683,6 +700,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Remaining rubric with live total.
           content:
@@ -713,6 +731,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Published drill (frozen).
           content:
@@ -740,6 +759,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Archived drill.
           content:
@@ -772,6 +792,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Brief.
           content:
@@ -799,6 +820,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Reference.
           content:
@@ -824,6 +846,7 @@ paths:
         (FR-KNW-010). Manager-only; knowledge is team-scoped (FR-IDA-009).
       operationId: listProductDocuments
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Documents.
           content:
@@ -853,6 +876,7 @@ paths:
               properties:
                 title: { type: string, minLength: 1, maxLength: 200 }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "201":
           description: Created.
           content:
@@ -879,6 +903,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DocumentIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Document detail.
           content:
@@ -915,6 +940,7 @@ paths:
                   format: binary
                   description: Source document, ≤ 20 MB, supported types (FR-KNW-003).
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "202":
           description: Extraction queued; poll GET /product-documents/{document_id}.
           content:
@@ -963,6 +989,7 @@ paths:
                   minItems: 1
                   items: { $ref: "#/components/schemas/FactInput" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Draft stored; review available.
           content:
@@ -986,6 +1013,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DocumentIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Diffed review.
           content:
@@ -1024,6 +1052,7 @@ paths:
               properties:
                 based_on_version: { type: integer, minimum: 0 }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Published; live facts replaced.
           content:
@@ -1065,6 +1094,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/CallRequest" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "201":
           description: Admitted; connect to LiveKit within join_deadline_seconds.
           content:
@@ -1105,6 +1135,7 @@ paths:
         - sessionCookie: []
         - candidateToken: []
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "204":
           description: Admission cancelled; nothing recorded or consumed.
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -1135,6 +1166,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/AttemptIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Attempt record.
           content:
@@ -1165,6 +1197,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/AttemptIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Review.
           content:
@@ -1194,6 +1227,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/MonthParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Dashboard.
           content:
@@ -1213,6 +1247,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/MonthParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Roster.
           content:
@@ -1244,6 +1279,7 @@ paths:
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/MonthParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Deep dive.
           content:
@@ -1268,6 +1304,7 @@ paths:
         - $ref: "#/components/parameters/CursorParam"
         - $ref: "#/components/parameters/LimitParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Catalog page.
           content:
@@ -1295,6 +1332,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Rollup + leaderboard.
           content:
@@ -1317,6 +1355,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/MonthParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Cohort membership.
           content:
@@ -1338,6 +1377,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/DrillIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Current assignment, or null when the published drill has not been assigned.
           content:
@@ -1372,6 +1412,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/AssignmentPut" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Assignment state after the write.
           content:
@@ -1402,6 +1443,7 @@ paths:
         - $ref: "#/components/parameters/CursorParam"
         - $ref: "#/components/parameters/LimitParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Positions page.
           content:
@@ -1438,6 +1480,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/PositionCreate" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "201":
           description: Created (status needs_authoring).
           content:
@@ -1456,6 +1499,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/PositionIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Position.
           content:
@@ -1480,6 +1524,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/PositionPatch" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Updated.
           content:
@@ -1522,6 +1567,7 @@ paths:
                   items: { type: string, format: uuid }
                   description: Published team drills, in stage order.
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Assessment saved; position active.
           content:
@@ -1556,6 +1602,7 @@ paths:
         - $ref: "#/components/parameters/CursorParam"
         - $ref: "#/components/parameters/LimitParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Candidates page with tab counts.
           content:
@@ -1589,6 +1636,7 @@ paths:
                   maxItems: 100
                   items: { $ref: "#/components/schemas/CandidateCreate" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "201":
           description: Candidates created (not yet invited).
           content:
@@ -1645,6 +1693,7 @@ paths:
                   type: string
                   format: binary
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Parsed rows with per-row problems for review.
           content:
@@ -1701,6 +1750,7 @@ paths:
                   type: [string, "null"]
                   description: Edited email body for this send; null uses the position template.
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "202":
           description: Tokens issued; emails queued; assessment frozen from the first send.
           content:
@@ -1746,6 +1796,7 @@ paths:
               properties:
                 internal_note: { type: [string, "null"], maxLength: 4000 }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Updated pipeline row.
           content:
@@ -1774,6 +1825,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CandidateIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "202":
           description: Fresh token issued; email queued.
           content:
@@ -1807,6 +1859,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CandidateIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Report.
           content:
@@ -1829,6 +1882,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CandidateIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Time-limited download URL.
           content:
@@ -1861,6 +1915,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/CandidateIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "202":
           description: Current pdf_status (render enqueued when it was none or failed).
           content:
@@ -1896,6 +1951,7 @@ paths:
               properties:
                 decision: { type: string, enum: [approved, rejected] }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Decision recorded.
           content:
@@ -1918,6 +1974,7 @@ paths:
       description: The manager's persistent HR recipient list (FR-HIR-014). Personal to the manager; never transfers with a position (FR-HIR-018).
       operationId: listHrContacts
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Contacts.
           content:
@@ -1951,6 +2008,7 @@ paths:
                 email: { type: string, format: email }
                 label: { type: [string, "null"], maxLength: 200 }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "201":
           description: Saved.
           content:
@@ -1976,6 +2034,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "204":
           description: Removed.
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -2027,6 +2086,7 @@ paths:
                   description: Must equal the server-derived set of recipient domains absent from this manager's prior shortlist history; each was visibly acknowledged (SEC-011).
                   items: { type: string, format: hostname }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "202":
           description: Shortlist recorded; email queued; included decisions frozen.
           content:
@@ -2066,6 +2126,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/PositionIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Closed.
           content:
@@ -2095,6 +2156,7 @@ paths:
       security:
         - candidateToken: []
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Assessment context.
           content:
@@ -2127,6 +2189,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/PreflightSubmit" }
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Pre-flight passed; assessment ready.
           content:
@@ -2163,6 +2226,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/StageIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Brief with stage position.
           content:
@@ -2195,6 +2259,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/StageIdParam"
       responses:
+        "403": { $ref: "#/components/responses/OrgSuspended" }
         "200":
           description: Reference.
           content:
@@ -2265,14 +2330,56 @@ paths:
         "401": { $ref: "#/components/responses/OpsUnauthorized" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
+  /ops/v1/service-term-preview:
+    post:
+      tags: [Ops]
+      summary: Calculate service and retention boundaries for operator confirmation
+      description: Computes local-date boundaries and purge eligibility for the confirmation display; the confirmed mutation rechecks the current policy and lifecycle sequence.
+      operationId: opsPreviewServiceTerm
+      security:
+        - opsSessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timezone, service_start_on, service_last_access_on, period_value, period_unit]
+              properties:
+                timezone: { type: string, description: IANA zone for the confirmed term. }
+                service_start_on: { type: string, format: date }
+                service_last_access_on: { type: string, format: date }
+                period_value: { type: integer, minimum: 1 }
+                period_unit: { type: string, enum: [elapsed_days, calendar_days, calendar_months] }
+      responses:
+        "200":
+          description: Calculated UTC instants and local date labels for confirmation; submission revalidates current policy and sequence.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [service_starts_at, service_ends_at, projected_purge_eligible_at]
+                properties:
+                  service_starts_at: { type: string, format: date-time }
+                  service_ends_at: { type: string, format: date-time }
+                  projected_purge_eligible_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
   /ops/v1/orgs:
     post:
       tags: [Ops]
       summary: Provision a customer org
-      description: Creates the tenancy shell with its civil-calendar timezone and registered account-email domain (ops verb provision_org; audited with reason; SEC-040).
+      description: Creates a never-reused tenancy identifier and optionally confirms its first service term. A shell without a term remains unconfigured and grants no ordinary access until an operator confirms the term. The console confirmation supplies dates and policy. When a term is included, Lifecycle-Operation-Id is required and identifies the entire create-and-confirm decision; a retry returns the original organization and term. The operation is audited with reason (SEC-040).
       operationId: opsCreateOrg
       security:
         - opsSessionCookie: []
+      parameters:
+        - name: Lifecycle-Operation-Id
+          in: header
+          required: false
+          description: Required when service dates are supplied; stable client-generated UUID for the whole create-and-confirm decision.
+          schema: { type: string, format: uuid }
       requestBody:
         required: true
         content:
@@ -2283,8 +2390,18 @@ paths:
               properties:
                 name: { type: string, minLength: 1 }
                 registered_domain: { type: string, format: hostname, description: Canonical lower-case IDNA ASCII domain used for exact account-provisioning matches (SEC-040). }
-                timezone: { type: string, default: Africa/Cairo, description: IANA zone — the org's civil calendar (data 01 §2). }
+                timezone: { type: string, default: Africa/Cairo, description: IANA zone for service and retention calendar boundaries (data 01 §2). }
+                service_start_on: { type: string, format: date, description: Inclusive local first access date. }
+                service_last_access_on: { type: string, format: date, description: Inclusive local last access date; the term ends at local 00:00 the next day. }
+                contract_reference: { type: string, minLength: 1 }
+                retention_policy: { $ref: "#/components/schemas/OrgRetentionPeriodInput" }
                 reason: { type: string, minLength: 1 }
+              description: service_start_on, service_last_access_on, and contract_reference are supplied together to confirm a term; absence creates an unconfigured shell.
+              dependentRequired:
+                service_start_on: [service_last_access_on, contract_reference]
+                service_last_access_on: [service_start_on, contract_reference]
+                contract_reference: [service_start_on, service_last_access_on]
+                retention_policy: [service_start_on, service_last_access_on, contract_reference]
       responses:
         "201":
           description: Org created.
@@ -2298,13 +2415,277 @@ paths:
                   name: { type: string }
                   registered_domain: { type: string, format: hostname }
                   timezone: { type: string }
+                  service_starts_at: { type: [string, "null"], format: date-time }
+                  service_ends_at: { type: [string, "null"], format: date-time }
+                  projected_purge_eligible_at: { type: [string, "null"], format: date-time, description: Calculated from the confirmed service end and applicable retention policy; the episode deadline is recorded at service end. }
         "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
         "422":
-          description: "Problem types: validation-error, reason-required."
+          description: "Problem types: validation-error, service-term-invalid, reason-required."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ValidationProblem" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/OrgLifecycleUnavailable" }
+
+  /ops/v1/orgs/{org_id}:
+    get:
+      tags: [Ops]
+      summary: Inspect organization lifecycle
+      operationId: opsGetOrgLifecycle
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+      responses:
+        "200":
+          description: Current lifecycle projection and verified decision sequence.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgLifecycleView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /ops/v1/orgs/{org_id}/service-terms:
+    post:
+      tags: [Ops]
+      summary: Confirm an initial or renewed service term
+      description: >
+        Records the explicit local dates and current policy in independent lifecycle history. Before
+        expiry the revision retains the original start and extends the last access date. During an
+        unclaimed hold it records a new start and cancels the named episode; purge claim and renewal
+        serialize. Access begins only at the new start instant.
+      operationId: opsConfirmOrgServiceTerm
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrgServiceTermCommand" }
+      responses:
+        "200":
+          description: Confirmed term and current lifecycle state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgLifecycleView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/OrgLifecycleUnavailable" }
+
+  /ops/v1/orgs/{org_id}/offboarding:
+    post:
+      tags: [Ops]
+      summary: End service early and start organization offboarding
+      description: >
+        Ends the current term at the accepted decision instant and creates one episode after current
+        contractual policy verification and active-call quiescence. Scheduled term expiry uses the
+        persisted service end instant and the internal transition job.
+        A repeated operation id returns its durable outcome. An already-offboarding organization
+        returns the existing episode without moving its deadline. An unresolved operation fences access.
+      operationId: opsStartOrgOffboarding
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrgLifecycleCommand" }
+      responses:
+        "200":
+          description: Current or newly accepted episode.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgLifecycleView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "503": { $ref: "#/components/responses/OrgLifecycleUnavailable" }
+
+  /ops/v1/orgs/{org_id}/offboarding/{offboarding_id}/cancel:
+    post:
+      tags: [Ops]
+      summary: Cancel an unclaimed early-termination episode
+      description: A service-expiry hold is cancelled through a confirmed renewal; this operation reverses an authorized early-termination episode before purge claim.
+      operationId: opsCancelOrgOffboarding
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+        - $ref: "#/components/parameters/OffboardingIdParam"
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrgLifecycleCommand" }
+      responses:
+        "200":
+          description: Cancellation applied; independent account and credential states persist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgLifecycleView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
+
+  /ops/v1/orgs/{org_id}/offboarding/{offboarding_id}/deadline:
+    post:
+      tags: [Ops]
+      summary: Extend the offboarding deadline before claim
+      operationId: opsExtendOrgDeadline
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+        - $ref: "#/components/parameters/OffboardingIdParam"
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/OrgLifecycleCommand"
+                - type: object
+                  required: [purge_eligible_at]
+                  properties:
+                    purge_eligible_at: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Extended deadline and current sequence.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgLifecycleView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /ops/v1/orgs/{org_id}/retention-policy:
+    get:
+      tags: [Ops]
+      summary: Inspect the verified effective contractual policy or default
+      operationId: opsGetOrgRetentionPolicy
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+      responses:
+        "200":
+          description: Current policy at a verified lifecycle head.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgRetentionPolicyView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/OrgLifecycleUnavailable" }
+    put:
+      tags: [Ops]
+      summary: Approve an organization contractual retention policy revision
+      operationId: opsReviseOrgRetentionPolicy
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrgRetentionPolicyCommand" }
+      responses:
+        "200":
+          description: Approved policy revision and current sequence.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgRetentionPolicyView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /ops/v1/orgs/{org_id}/offboarding/{offboarding_id}/restrictions:
+    post:
+      tags: [Ops]
+      summary: Record a deletion restriction
+      operationId: opsCreateOrgDeletionRestriction
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+        - $ref: "#/components/parameters/OffboardingIdParam"
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrgRestrictionCommand" }
+      responses:
+        "200":
+          description: Restriction accepted or completed-purge arrival recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgRestrictionView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
+
+  /ops/v1/orgs/{org_id}/offboarding/{offboarding_id}/restrictions/{restriction_id}/release:
+    post:
+      tags: [Ops]
+      summary: Release a deletion restriction on documented evidence
+      operationId: opsReleaseOrgDeletionRestriction
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+        - $ref: "#/components/parameters/OffboardingIdParam"
+        - $ref: "#/components/parameters/RestrictionIdParam"
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrgLifecycleCommand" }
+      responses:
+        "200":
+          description: Restriction release recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgRestrictionView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
+
+  /ops/v1/orgs/{org_id}/offboarding/{offboarding_id}/purge:
+    get:
+      tags: [Ops]
+      summary: Inspect purge progress and independent evidence
+      description: Audited inspection returns content-free progress and verification evidence, including after organization-row deletion.
+      operationId: opsGetOrgPurge
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/OrgIdParam"
+        - $ref: "#/components/parameters/OffboardingIdParam"
+      responses:
+        "200":
+          description: Run progress, restrictions, completed batches, and verification summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrgPurgeView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /ops/v1/accounts:
     post:
@@ -2584,7 +2965,8 @@ paths:
       tags: [Ops]
       summary: Create an erasure request (CMP-001)
       description: >
-        Queues subject erasure — account or candidate — executed by the dedicated procedure that
+        Accepts subject erasure — account or candidate — with any required source-data
+        restriction before queuing the dedicated procedure that
         removes the person and leaves the statistical residue, reaching the object store as well
         (ADR-0033, data 03 §3). Audited with reason; evidence counts land on the request.
       operationId: opsCreateErasureRequest
@@ -2604,6 +2986,11 @@ paths:
         "401": { $ref: "#/components/responses/OpsUnauthorized" }
         "404":
           description: "Problem type: subject-unknown."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: "Problem type: source-unavailable; assess remaining obligations from retained evidence."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2633,6 +3020,31 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/RateLimited" }
 
+  /ops/v1/erasure-requests/{request_id}/state:
+    post:
+      tags: [Ops]
+      summary: Record an audited subject-rights state decision
+      operationId: opsSetErasureRequestState
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/RequestIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubjectRequestStateCommand" }
+      responses:
+        "200":
+          description: Current request and restriction outcome.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErasureRequestView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
   /ops/v1/export-requests:
     get:
       tags: [Ops]
@@ -2661,7 +3073,7 @@ paths:
     post:
       tags: [Ops]
       summary: Create a data export request (CMP-001)
-      description: Queues a subject data-export bundle; the bundle auto-expires (data 03 §2). Audited with reason.
+      description: Accepts a subject data-export request with its source-data restriction before queuing; the bundle auto-expires (data 03 §2). Audited with reason.
       operationId: opsCreateExportRequest
       security:
         - opsSessionCookie: []
@@ -2679,6 +3091,11 @@ paths:
         "401": { $ref: "#/components/responses/OpsUnauthorized" }
         "404":
           description: "Problem type: subject-unknown."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "409":
+          description: "Problem type: source-unavailable; assess remaining obligations from retained evidence."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -2707,6 +3124,31 @@ paths:
         "401": { $ref: "#/components/responses/OpsUnauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "429": { $ref: "#/components/responses/RateLimited" }
+
+  /ops/v1/export-requests/{request_id}/state:
+    post:
+      tags: [Ops]
+      summary: Record an audited export request state decision
+      operationId: opsSetExportRequestState
+      security:
+        - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/RequestIdParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubjectRequestStateCommand" }
+      responses:
+        "200":
+          description: Current request and restriction outcome.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExportRequestView" }
+        "401": { $ref: "#/components/responses/OpsUnauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
+        "422": { $ref: "#/components/responses/ValidationError" }
 
   /ops/v1/audit:
     get:
@@ -2822,6 +3264,29 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    OrgIdParam:
+      name: org_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OffboardingIdParam:
+      name: offboarding_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RestrictionIdParam:
+      name: restriction_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    LifecycleOperationIdHeader:
+      name: Lifecycle-Operation-Id
+      in: header
+      required: true
+      description: >
+        Stable client-generated UUID. Its durable recorded outcome is returned on every retry,
+        including after a database restore; it is never reused for another decision.
+      schema: { type: string, format: uuid }
     RequestIdParam:
       name: request_id
       in: path
@@ -2844,6 +3309,21 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
     OpsUnauthorized:
       description: "Problem type: ops-session-invalid."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    OrgLifecycleConflict:
+      description: "Problem types: lifecycle-sequence-stale, offboarding-episode-stale, purge-already-claimed, operation-id-reuse."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    OrgLifecycleUnavailable:
+      description: "Problem types: retention-policy-unverified, lifecycle-history-unverified, offboarding-quiescence-pending."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    OrgSuspended:
+      description: "Problem type: organization-suspended. The confirmed service interval and current lifecycle override an otherwise valid ordinary grant."
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
@@ -3318,8 +3798,9 @@ components:
     GenerationState:
       type: object
       description: >
-        Projection of the drill's single request-bound generation lane. A displaced request cannot
-        alter these states. The error is present only for the active failed kind (FR-DRL-005/006).
+        Projection of the drill's two stage-specific request-bound generation states; at most one
+        stage is running. A displaced request cannot alter these states. The error is present only
+        for the failed stage (FR-DRL-005/006).
       required: [scenario_status, rubric_status, error]
       properties:
         scenario_status: { type: string, enum: [none, running, succeeded, failed] }
@@ -4200,6 +4681,136 @@ components:
       properties:
         reason: { type: string, minLength: 1 }
 
+    OrgLifecycleCommand:
+      type: object
+      required: [expected_sequence, reason]
+      properties:
+        expected_sequence: { type: integer, minimum: 0 }
+        reason: { type: string, minLength: 1 }
+
+    OrgRetentionPeriodInput:
+      type: object
+      required: [policy_reference, period_value, period_unit]
+      properties:
+        policy_reference: { type: string, minLength: 1 }
+        period_value: { type: integer, minimum: 1 }
+        period_unit: { type: string, enum: [elapsed_days, calendar_days, calendar_months] }
+        calendar_timezone: { type: [string, "null"], description: IANA zone required for calendar periods; matches the confirmed organization service zone. }
+
+    OrgServiceTermCommand:
+      type: object
+      required: [expected_sequence, service_start_on, service_last_access_on, contract_reference, reason]
+      properties:
+        expected_sequence: { type: integer, minimum: 0 }
+        current_offboarding_id: { type: [string, "null"], format: uuid, description: Required when renewing during an unclaimed hold. }
+        service_start_on: { type: string, format: date, description: Inclusive local first access date; active-term extension retains the current original start date. }
+        service_last_access_on: { type: string, format: date, description: Inclusive local last access date. }
+        contract_reference: { type: string, minLength: 1 }
+        retention_policy: { $ref: "#/components/schemas/OrgRetentionPeriodInput" }
+        reason: { type: string, minLength: 1 }
+
+    OrgLifecycleView:
+      type: object
+      required: [org_id, lifecycle_status, access_status, lifecycle_sequence, history_verified]
+      properties:
+        org_id: { type: string, format: uuid }
+        lifecycle_status: { type: string, enum: [active, offboarding, purging] }
+        access_status: { type: string, enum: [unconfigured, scheduled, available, hold, purging], description: "Effective status from the current service term, time, and lifecycle decision." }
+        service_term_enforced: { type: boolean, description: Whether ordinary access requires a confirmed current service term. }
+        service_term_id: { type: [string, "null"], format: uuid }
+        service_start_on: { type: [string, "null"], format: date }
+        service_last_access_on: { type: [string, "null"], format: date }
+        service_starts_at: { type: [string, "null"], format: date-time }
+        service_ends_at: { type: [string, "null"], format: date-time }
+        projected_purge_eligible_at: { type: [string, "null"], format: date-time, description: Calculated from the current term before an episode exists. }
+        service_timezone: { type: [string, "null"] }
+        contract_reference: { type: [string, "null"] }
+        lifecycle_sequence: { type: integer, minimum: 0 }
+        history_verified: { type: boolean }
+        pending_operation_id: { type: [string, "null"], format: uuid }
+        pending_operation_status: { type: [string, "null"], enum: [pending, applied, rejected, null] }
+        offboarding_id: { type: [string, "null"], format: uuid }
+        offboarding_started_at: { type: [string, "null"], format: date-time }
+        offboarding_started_by: { type: [string, "null"], format: uuid }
+        purge_eligible_at: { type: [string, "null"], format: date-time, description: Persisted deadline for the current offboarding episode. }
+        retention_policy_reference: { type: [string, "null"] }
+        restrictions:
+          type: array
+          items: { $ref: "#/components/schemas/OrgRestrictionView" }
+
+    OrgRetentionPolicyCommand:
+      type: object
+      required: [expected_sequence, policy_reference, contract_reference, period_value, period_unit, reason]
+      properties:
+        expected_sequence: { type: integer, minimum: 0 }
+        policy_reference: { type: string, minLength: 1 }
+        contract_reference: { type: string, minLength: 1 }
+        period_value: { type: integer, minimum: 1 }
+        period_unit: { type: string, enum: [elapsed_days, calendar_days, calendar_months] }
+        calendar_timezone: { type: [string, "null"], description: Required IANA zone matching the organization service zone for calendar_days and calendar_months; absent for elapsed_days. }
+        reason: { type: string, minLength: 1 }
+
+    OrgRetentionPolicyView:
+      type: object
+      required: [org_id, source, policy_reference, period_value, period_unit, lifecycle_sequence, history_verified]
+      properties:
+        org_id: { type: string, format: uuid }
+        source: { type: string, enum: [contract, default] }
+        policy_reference: { type: string }
+        contract_reference: { type: [string, "null"] }
+        period_value: { type: integer, minimum: 1 }
+        period_unit: { type: string, enum: [elapsed_days, calendar_days, calendar_months] }
+        calendar_timezone: { type: [string, "null"] }
+        lifecycle_sequence: { type: integer, minimum: 0 }
+        history_verified: { type: boolean }
+        approved_at: { type: [string, "null"], format: date-time }
+
+    OrgRestrictionCommand:
+      type: object
+      required: [expected_sequence, scope, reason, authority_ref, release_condition]
+      properties:
+        expected_sequence: { type: integer, minimum: 0 }
+        scope: { type: string, minLength: 1 }
+        reason: { type: string, minLength: 1 }
+        authority_ref: { type: string, minLength: 1 }
+        release_condition: { type: string, minLength: 1 }
+        related_request_id: { type: [string, "null"], format: uuid }
+
+    OrgRestrictionView:
+      type: object
+      required: [id, org_id, offboarding_id, scope, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        offboarding_id: { type: string, format: uuid }
+        scope: { type: string }
+        status: { type: string, enum: [active, released, completed_before_arrival] }
+        created_at: { type: string, format: date-time }
+        released_at: { type: [string, "null"], format: date-time }
+        related_request_id: { type: [string, "null"], format: uuid }
+
+    OrgPurgeView:
+      type: object
+      required: [purge_run_id, org_id, offboarding_id, status, destructive_started, steps]
+      properties:
+        purge_run_id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        offboarding_id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, running, paused_restriction, retry_pending, needs_attention, completed] }
+        destructive_started: { type: boolean }
+        steps:
+          type: array
+          items:
+            type: object
+            required: [step_key, batch_key, status]
+            properties:
+              step_key: { type: string }
+              batch_key: { type: string }
+              status: { type: string, enum: [authorized, completed, failed] }
+              deleted_count: { type: integer, minimum: 0 }
+        verification_summary: { type: object, additionalProperties: true }
+        completed_at: { type: [string, "null"], format: date-time }
+
     FaultView:
       type: object
       description: Fault-queue record — ids and states, never customer content (ADR-0010 §4).
@@ -4220,7 +4831,10 @@ components:
 
     SubjectRequestCreate:
       type: object
-      description: CMP-001 subject-rights request — covers reps, managers, and candidates.
+      description: >
+        CMP-001 subject-rights request for a rep, manager, or candidate. Acceptance applies
+        the approved current request-policy version and records any source-data restriction
+        before the worker can run.
       required: [org_id, subject_kind, subject_id, reason]
       properties:
         org_id: { type: string, format: uuid }
@@ -4228,15 +4842,31 @@ components:
         subject_id: { type: string, format: uuid }
         reason: { type: string, minLength: 1 }
 
+    SubjectRequestStateCommand:
+      type: object
+      required: [expected_status, status, reason]
+      properties:
+        expected_status: { type: string, enum: [pending, processing, awaiting_input, ready, failed] }
+        status: { type: string, enum: [awaiting_input, pending, rejected, withdrawn, delivered] }
+        reason: { type: string, minLength: 1 }
+        evidence_reference: { type: [string, "null"] }
+      description: >
+        An authorized operator records information wait, resumption, delivery, rejection, or
+        withdrawal. The server derives the 30-day UTC response deadline and reconciles the
+        corresponding deletion restriction before a terminal decision is reported complete.
+
     ErasureRequestView:
       type: object
-      required: [id, org_id, subject_kind, subject_id, status, requested_at]
+      required: [id, org_id, subject_kind, subject_id, status, request_policy_reference, requested_at]
       properties:
         id: { type: string, format: uuid }
         org_id: { type: string, format: uuid }
         subject_kind: { type: string, enum: [account, candidate] }
         subject_id: { type: string, format: uuid }
-        status: { type: string, enum: [pending, executed, failed] }
+        status: { type: string, enum: [pending, processing, awaiting_input, executed, failed, rejected, withdrawn] }
+        request_policy_reference: { type: string }
+        response_due_at: { type: [string, "null"], format: date-time }
+        restriction_id: { type: [string, "null"], format: uuid }
         requested_at: { type: string, format: date-time }
         executed_at: { type: [string, "null"], format: date-time }
         evidence:
@@ -4246,17 +4876,20 @@ components:
 
     ExportRequestView:
       type: object
-      required: [id, org_id, subject_kind, subject_id, status, requested_at]
+      required: [id, org_id, subject_kind, subject_id, status, request_policy_reference, requested_at]
       properties:
         id: { type: string, format: uuid }
         org_id: { type: string, format: uuid }
         subject_kind: { type: string, enum: [account, candidate] }
         subject_id: { type: string, format: uuid }
-        status: { type: string, enum: [pending, ready, delivered, failed] }
+        status: { type: string, enum: [pending, processing, awaiting_input, ready, delivered, failed, rejected, withdrawn] }
+        request_policy_reference: { type: string }
+        response_due_at: { type: [string, "null"], format: date-time }
+        restriction_id: { type: [string, "null"], format: uuid }
         requested_at: { type: string, format: date-time }
         ready_at: { type: [string, "null"], format: date-time }
         expires_at: { type: [string, "null"], format: date-time, description: Bundle auto-delete (data 03 §2). }
-        bundle_url: { type: [string, "null"], format: uri, description: Time-limited download when ready. }
+        bundle_url: { type: [string, "null"], format: uri, description: Audited single-bundle delivery capability with at most one-hour lifetime when ready. }
 
     AuditEntry:
       type: object
@@ -4267,7 +4900,7 @@ components:
         ops_account_id: { type: string, format: uuid }
         verb:
           type: string
-          enum: [provision_org, provision_account, deactivate_account, change_team_mapping, transfer_position, resolve_fault, execute_erasure, execute_export]
+          enum: [provision_org, confirm_org_term, renew_org_term, provision_account, deactivate_account, change_team_mapping, transfer_position, resolve_fault, execute_erasure, execute_export, resolve_subject_request, start_org_offboarding, cancel_org_offboarding, extend_org_deadline, create_org_deletion_restriction, release_org_deletion_restriction, record_post_completion_restriction, revise_org_retention_policy, inspect_org_purge_evidence, resolve_org_purge_fault]
         target_org_id: { type: [string, "null"], format: uuid }
         target_ref:
           type: object

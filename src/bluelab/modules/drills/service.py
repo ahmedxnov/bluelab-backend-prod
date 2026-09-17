@@ -36,6 +36,56 @@ from bluelab.platform.queue.enqueue import enqueue
 Kind = Literal["scenario", "rubric"]
 
 
+async def archive_drill(
+    session: AsyncSession,
+    *,
+    drill_id: UUID,
+    org_id: UUID,
+    team_id: UUID,
+    viewer_id: UUID,
+) -> None:
+    """Archive a manager-owned published drill and withdraw future work.
+
+    Existing attempts remain untouched.  The drill row is locked before the
+    assignment is removed so archive, assignment, and assessment composition
+    races converge on the archived state.
+    """
+    row = (
+        await session.execute(
+            text(
+                "select status from drill where id=:drill and org_id=:org and "
+                "team_id=:team and author_account_id=:viewer and not self_authored "
+                "for update"
+            ),
+            {"drill": drill_id, "org": org_id, "team": team_id, "viewer": viewer_id},
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise not_found()
+    if row == "draft":
+        raise ProblemError(catalog.DRILL_NOT_ARCHIVABLE)
+    if row == "archived":
+        return
+    # A frozen position retains its historical assessment stages.  Admission
+    # rejects archived drills; unfrozen future composition withdraws the stage.
+    await session.execute(
+        text(
+            "delete from assessment_stage s using position p "
+            "where s.position_id=p.id and s.drill_id=:drill "
+            "and p.assessment_frozen_at is null"
+        ),
+        {"drill": drill_id},
+    )
+    await session.execute(text("delete from assignment where drill_id=:drill"), {"drill": drill_id})
+    await session.execute(
+        text(
+            "update drill set status='archived', archived_at=now(), updated_at=now() "
+            "where id=:drill and status='published'"
+        ),
+        {"drill": drill_id},
+    )
+
+
 async def list_options(
     session: AsyncSession, *, kind: str | None
 ) -> list[AuthoringOption]:

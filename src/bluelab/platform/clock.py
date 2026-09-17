@@ -19,8 +19,10 @@ crash — the worst kind of bug to ship.
 from __future__ import annotations
 
 import re
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _MONTH_PATTERN = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
@@ -143,6 +145,87 @@ def due_date_deadline(due: date, org_timezone: str) -> datetime:
     zone = _zone(org_timezone)
     next_day = due + timedelta(days=1)
     return datetime(next_day.year, next_day.month, next_day.day, tzinfo=zone).astimezone(UTC)
+
+
+RetentionUnit = Literal["elapsed_days", "calendar_days", "calendar_months"]
+
+
+def resolve_local_time(local: datetime, timezone: str) -> datetime:
+    """Resolve a local civil time to UTC, choosing the later offset on a fold.
+
+    During a forward clock jump, use the first valid instant after the missing
+    local time. A skipped whole date has no such instant and is rejected.
+    """
+    if local.tzinfo is not None:
+        raise ValueError("local time must be naive")
+    zone = _zone(timezone)
+    candidates = [local.replace(tzinfo=zone, fold=fold).astimezone(UTC) for fold in (0, 1)]
+    valid = [
+        candidate
+        for candidate in candidates
+        if candidate.astimezone(zone).replace(tzinfo=None) == local
+    ]
+    if valid:
+        return max(valid)
+
+    lower, upper = sorted(candidates)
+    # A missing local time lies in the forward gap bounded by the two folds.
+    # Search for its first valid UTC microsecond, including unusual non-hour gaps.
+    if upper.astimezone(zone).replace(tzinfo=None) < local:
+        raise ValueError("local time has no valid successor on this date")
+    while upper - lower > timedelta(microseconds=1):
+        midpoint = lower + (upper - lower) / 2
+        if midpoint.astimezone(zone).replace(tzinfo=None) >= local:
+            upper = midpoint
+        else:
+            lower = midpoint
+    if upper.astimezone(zone).date() != local.date():
+        raise ValueError("local date has no valid instant")
+    return upper
+
+
+def service_term_bounds(
+    start_on: date, last_access_on: date, timezone: str
+) -> tuple[datetime, datetime]:
+    """Inclusive local dates become a half-open UTC access interval."""
+    if last_access_on < start_on:
+        raise ValueError("last access date precedes start date")
+    starts_at = resolve_local_time(datetime.combine(start_on, datetime.min.time()), timezone)
+    ends_at = resolve_local_time(
+        datetime.combine(last_access_on + timedelta(days=1), datetime.min.time()),
+        timezone,
+    )
+    if ends_at <= starts_at:
+        raise ValueError("service term has no access interval")
+    return starts_at, ends_at
+
+
+def retention_deadline(
+    cutoff: datetime, period_value: int, period_unit: RetentionUnit, timezone: str | None
+) -> datetime:
+    """Resolve a contractual retention period from its actual UTC cutoff."""
+    if cutoff.tzinfo is None or period_value < 1:
+        raise ValueError("cutoff must be aware and period must be positive")
+    cutoff = cutoff.astimezone(UTC)
+    if period_unit == "elapsed_days":
+        if timezone is not None:
+            raise ValueError("elapsed-day retention has no calendar timezone")
+        return cutoff + timedelta(days=period_value)
+    if timezone is None:
+        raise ValueError("calendar retention requires a timezone")
+    local = cutoff.astimezone(_zone(timezone)).replace(tzinfo=None)
+    if period_unit == "calendar_days":
+        target = local + timedelta(days=period_value)
+    elif period_unit == "calendar_months":
+        month_index = local.year * 12 + local.month - 1 + period_value
+        year, zero_month = divmod(month_index, 12)
+        month = zero_month + 1
+        target = local.replace(
+            year=year, month=month, day=min(local.day, monthrange(year, month)[1])
+        )
+    else:
+        raise ValueError("unknown retention period unit")
+    return resolve_local_time(target, timezone)
 
 
 def _zone(name: str) -> ZoneInfo:

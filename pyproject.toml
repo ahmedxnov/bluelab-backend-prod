@@ -62,6 +62,7 @@ dev = [
 bluelab-api = "bluelab.entrypoints.api:main"
 bluelab-worker = "bluelab.entrypoints.worker:main"
 bluelab-sweeper = "bluelab.entrypoints.sweeper:main"
+bluelab-restore-reconcile = "bluelab.entrypoints.restore_reconcile:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bluelab", "src/bluelab_runtime_bundle"]
@@ -89,6 +90,7 @@ layers = [
   "bluelab.api",
   "bluelab.calls",
   "bluelab.work",
+  "bluelab.lifecycle",
   "bluelab.modules",
   "bluelab.notifications",
   "bluelab.adapters",

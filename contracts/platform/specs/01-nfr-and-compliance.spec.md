@@ -38,7 +38,12 @@ All user-facing experiences shall function fully on the current and previous maj
 
 ## 2. Compliance requirements
 
-### CMP-001: Egyptian personal-data protection `[Must]`
+These requirements bind the Egypt launch. BlueLab's target expansion across the Middle East requires
+an approved country-specific obligation and control mapping before serving customers in each additional
+market. The mapping addresses personal-data protection, recording and assessment rules, subject rights,
+retention, processor locations, and cross-border transfers for that market.
+
+### CMP-001: Egypt-launch personal-data protection `[Must]`
 The system shall process personal data in accordance with Egypt's Personal Data Protection Law (PDPL), including: a lawful basis for processing each category of personal data it holds; the ability to export a person's data on request; and the ability to permanently erase a person's data on request. Erasure and export cover reps, managers, and candidates.
 **Verified by:** data-inventory review mapping every personal-data category to its basis, export path, and erasure path; erasure/export executed and evidenced in test.
 *Legal counsel confirms the detailed obligations; this requirement binds the product to support them.*
@@ -101,7 +106,7 @@ The following hold identically at T1, T2, and T3, and **no rollout tier may weak
 | **NFR-007** — browser support | Users arrive on the browser they own, at every tier. |
 | **Every `CMP-*`** — PDPL, consent, job-relevance, tenant isolation, terms acceptance | Compliance is not a function of scale, funding, or audience. A demo processes real people's voices and real personal data; the legal obligations attach on the first call, not on the first invoice. **No tier grants a compliance concession, and none may be read into one.** |
 
-**One structural rule protects all of the above: there is no tier-conditional application code.** The tier is expressed entirely in infrastructure composition ([ADR-0051](../infra/adr/0051-tiered-deployment-compositions.md)) and configuration values — limits, plan keys, schedules — and **never in a branch that changes product behavior**. A conditional in application code keyed on the tier is a defect, not an optimization: it would make the demo stop demonstrating the product, and it would leave the Tier-3 path carrying branches that no tier has ever exercised. Phase 9's Definition of Done and Phase 13's reviews enforce this.
+**One structural rule protects all of the above: there is no tier-conditional application code.** The tier is expressed entirely in infrastructure composition ([ADR-0051](../infra/adr/0051-tiered-deployment-compositions.md)) and configuration values — limits, plan keys, schedules — and **never in a branch that changes product behavior**. A conditional in application code keyed on the tier is a defect, not an optimization: it would make the demo stop demonstrating the product, and it would leave the Tier-3 path carrying branches that no tier has ever exercised. Phase 9's executable Definition of Done enforces this throughout construction and production maintenance; Phase 13's independent reviews add human enforcement in production maintenance.
 
 ### 3.3 Promotion triggers *(ratified by the owner 2026-07-24)*
 

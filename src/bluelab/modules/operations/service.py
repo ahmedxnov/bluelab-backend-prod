@@ -9,7 +9,7 @@ import binascii
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import NoReturn
+from typing import Literal, NoReturn
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -25,11 +25,18 @@ from bluelab.modules.operations.schemas import (
     AuditEntry,
     AuditPage,
     CursorPage,
+    ErasureRequestPage,
+    ErasureRequestView,
+    ExportRequestPage,
+    ExportRequestView,
+    SubjectKind,
 )
 from bluelab.platform.config import Settings
 from bluelab.platform.errors import catalog
-from bluelab.platform.errors.denial import ProblemError
+from bluelab.platform.errors.denial import ProblemError, not_found
 from bluelab.platform.ids import new_id
+from bluelab.platform.queue.catalog import Lane
+from bluelab.platform.queue.enqueue import enqueue
 from bluelab.platform.security import passwords
 from bluelab.platform.security.throttle import Limit, Throttle
 from bluelab.platform.security.tokens import hash_token
@@ -283,4 +290,207 @@ async def list_audit(
     return AuditPage(
         data=data,
         pagination=CursorPage(next_cursor=next_cursor, has_more=has_more),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class DeactivationResult:
+    account_id: UUID
+    org_id: UUID
+    status: Literal["deactivated"]
+
+
+async def deactivate_account(
+    session: AsyncSession, *, account_id: UUID
+) -> DeactivationResult:
+    """Run the ops-only deactivation boundary with dependent checks."""
+    row = (
+        await session.execute(
+            text("select * from app_deactivate_account(:account_id)"),
+            {"account_id": account_id},
+        )
+    ).mappings().one_or_none()
+    if row is None:
+        raise ProblemError(catalog.SUBJECT_UNKNOWN)
+    if int(row["dependent_reps"]) or int(row["open_positions"]):
+        raise ProblemError(
+            catalog.MANAGER_OWNS_DEPENDENTS,
+            meta={
+                "reps": int(row["dependent_reps"]),
+                "open_positions": int(row["open_positions"]),
+            },
+        )
+    return DeactivationResult(
+        account_id=account_id, org_id=UUID(str(row["org_id"])), status="deactivated"
+    )
+
+
+async def change_team(
+    session: AsyncSession, *, account_id: UUID, new_manager_account_id: UUID
+) -> tuple[UUID, UUID]:
+    """Move one rep and every scope-cascading historical child atomically."""
+    row = (
+        await session.execute(
+            text("select * from app_change_team(:account_id,:manager_id)"),
+            {"account_id": account_id, "manager_id": new_manager_account_id},
+        )
+    ).one_or_none()
+    if row is None:
+        raise ProblemError(catalog.VALIDATION_ERROR)
+    return UUID(str(row.org_id)), UUID(str(row.team_id))
+
+
+async def transfer_position(
+    session: AsyncSession, *, position_id: UUID, new_manager_account_id: UUID
+) -> tuple[UUID, UUID]:
+    """Transfer a position subtree while leaving personal HR contacts in place."""
+    row = (
+        await session.execute(
+            text("select * from app_transfer_position(:position_id,:manager_id)"),
+            {"position_id": position_id, "manager_id": new_manager_account_id},
+        )
+    ).one_or_none()
+    if row is None:
+        raise ProblemError(catalog.VALIDATION_ERROR)
+    return UUID(str(row.org_id)), UUID(str(row.team_id))
+
+
+@dataclass(frozen=True, slots=True)
+class _RequestCursor:
+    requested_at: datetime
+    request_id: UUID
+
+    def encode(self) -> str:
+        raw = json.dumps(
+            {"id": str(self.request_id), "requested_at": self.requested_at.isoformat(), "v": 1},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        return base64.urlsafe_b64encode(raw).decode()
+
+    @classmethod
+    def decode(cls, value: str) -> _RequestCursor:
+        try:
+            raw = base64.b64decode(value.encode(), altchars=b"-_", validate=True)
+            data = json.loads(raw)
+            if set(data) != {"id", "requested_at", "v"} or data["v"] != 1:
+                raise ValueError
+            requested_at = datetime.fromisoformat(data["requested_at"])
+            if requested_at.tzinfo is None:
+                raise ValueError
+            return cls(requested_at=requested_at, request_id=UUID(data["id"]))
+        except (ValueError, TypeError, KeyError, binascii.Error, json.JSONDecodeError) as exc:
+            raise ProblemError(catalog.VALIDATION_ERROR, detail="cursor is not one this server issued") from exc
+
+
+async def create_subject_request(
+    session: AsyncSession,
+    *,
+    request_kind: Literal["erasure", "export"],
+    org_id: UUID,
+    subject_kind: SubjectKind,
+    subject_id: UUID,
+    executed_by: UUID,
+) -> ErasureRequestView | ExportRequestView:
+    """Validate one subject and transactionally enqueue its rights request."""
+    request_id = new_id()
+    await session.execute(
+        text("select pg_advisory_xact_lock(hashtextextended(:subject, 0))"),
+        {"subject": str(subject_id)},
+    )
+    valid = (
+        await session.execute(
+            text("select app_subject_request_valid(:org,:kind,:subject,:erasure)"),
+            {
+                "org": org_id,
+                "kind": subject_kind,
+                "subject": subject_id,
+                "erasure": request_kind == "erasure",
+            },
+        )
+    ).scalar_one()
+    if not valid:
+        raise ProblemError(catalog.SUBJECT_UNKNOWN)
+    table = "erasure_request" if request_kind == "erasure" else "export_request"
+    columns = ",executed_by" if request_kind == "erasure" else ""
+    values = ",:actor" if request_kind == "erasure" else ""
+    await session.execute(
+        text(
+            f"insert into {table}(id,org_id,subject_kind,subject_id{columns}) "
+            f"values(:id,:org,:kind,:subject{values})"
+        ),
+        {
+            "id": request_id,
+            "org": org_id,
+            "kind": subject_kind,
+            "subject": subject_id,
+            "actor": executed_by,
+        },
+    )
+    lane = Lane.EXECUTE_ERASURE if request_kind == "erasure" else Lane.EXECUTE_EXPORT
+    await enqueue(session, lane, {"request_id": str(request_id)}, org_id=org_id)
+    return await get_subject_request(
+        session, request_kind=request_kind, request_id=request_id, bundle_url=None
+    )
+
+
+async def get_subject_request(
+    session: AsyncSession,
+    *,
+    request_kind: Literal["erasure", "export"],
+    request_id: UUID,
+    bundle_url: str | None,
+) -> ErasureRequestView | ExportRequestView:
+    table = "erasure_request" if request_kind == "erasure" else "export_request"
+    row = (
+        await session.execute(text(f"select * from {table} where id=:id"), {"id": request_id})
+    ).mappings().one_or_none()
+    if row is None:
+        raise not_found()
+    if request_kind == "erasure":
+        return ErasureRequestView.model_validate(row)
+    payload = dict(row)
+    payload["bundle_url"] = bundle_url
+    return ExportRequestView.model_validate(payload)
+
+
+async def list_subject_requests(
+    session: AsyncSession,
+    *,
+    request_kind: Literal["erasure", "export"],
+    cursor: str | None,
+    limit: int,
+) -> ErasureRequestPage | ExportRequestPage:
+    table = "erasure_request" if request_kind == "erasure" else "export_request"
+    position = _RequestCursor.decode(cursor) if cursor else None
+    rows = (
+        await session.execute(
+            text(
+                f"select * from {table} where (cast(:at as timestamptz) is null or "
+                "(requested_at,id)<(cast(:at as timestamptz),cast(:id as uuid))) "
+                "order by requested_at desc,id desc limit :limit"
+            ),
+            {
+                "at": position.requested_at if position else None,
+                "id": position.request_id if position else None,
+                "limit": limit + 1,
+            },
+        )
+    ).mappings().all()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor = (
+        _RequestCursor(page[-1]["requested_at"], page[-1]["id"]).encode()
+        if has_more and page
+        else None
+    )
+    pagination = CursorPage(next_cursor=next_cursor, has_more=has_more)
+    if request_kind == "erasure":
+        return ErasureRequestPage(
+            data=[ErasureRequestView.model_validate(row) for row in page],
+            pagination=pagination,
+        )
+    return ExportRequestPage(
+        data=[ExportRequestView.model_validate({**dict(row), "bundle_url": None}) for row in page],
+        pagination=pagination,
     )

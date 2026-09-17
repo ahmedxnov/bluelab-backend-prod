@@ -8,7 +8,7 @@ models are checked against it by the conformance diff, they do not define it.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -69,7 +69,24 @@ class OpsOrgCreate(_Request):
     name: Annotated[str, Field(min_length=1)]
     registered_domain: str
     timezone: str = "Africa/Cairo"
+    service_start_on: date | None = None
+    service_last_access_on: date | None = None
+    contract_reference: str | None = None
+    retention_policy: OrgRetentionPeriodInput | None = None
     reason: Reason
+
+    @model_validator(mode="after")
+    def _term_bundle(self) -> OpsOrgCreate:
+        supplied = (
+            self.service_start_on is not None,
+            self.service_last_access_on is not None,
+            self.contract_reference is not None,
+        )
+        if any(supplied) and not all(supplied):
+            raise ValueError("service dates and contract reference must be supplied together")
+        if self.retention_policy is not None and not all(supplied):
+            raise ValueError("retention policy requires a confirmed service term")
+        return self
 
     @field_validator("registered_domain")
     @classmethod
@@ -91,6 +108,111 @@ class OpsOrgView(BaseModel):
     name: str
     registered_domain: str
     timezone: str
+    service_starts_at: datetime | None = None
+    service_ends_at: datetime | None = None
+    projected_purge_eligible_at: datetime | None = None
+
+
+RetentionUnit = Literal["elapsed_days", "calendar_days", "calendar_months"]
+
+
+class ServiceTermPreviewRequest(_Request):
+    timezone: str
+    service_start_on: date
+    service_last_access_on: date
+    period_value: Annotated[int, Field(ge=1)]
+    period_unit: RetentionUnit
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone(cls, value: str) -> str:
+        return OpsOrgCreate._timezone(value)
+
+    @model_validator(mode="after")
+    def _dates(self) -> ServiceTermPreviewRequest:
+        if self.service_last_access_on < self.service_start_on:
+            raise ValueError("service_last_access_on must not precede service_start_on")
+        return self
+
+
+class ServiceTermPreviewView(BaseModel):
+    service_starts_at: datetime
+    service_ends_at: datetime
+    projected_purge_eligible_at: datetime
+
+
+class OrgRetentionPeriodInput(_Request):
+    policy_reference: Annotated[str, Field(min_length=1)]
+    period_value: Annotated[int, Field(ge=1)]
+    period_unit: RetentionUnit
+    calendar_timezone: str | None = None
+
+    @model_validator(mode="after")
+    def _calendar_zone(self) -> OrgRetentionPeriodInput:
+        if self.period_unit == "elapsed_days" and self.calendar_timezone is not None:
+            raise ValueError("elapsed-day retention has no calendar timezone")
+        if self.period_unit != "elapsed_days":
+            if self.calendar_timezone is None:
+                raise ValueError("calendar retention requires a timezone")
+            OpsOrgCreate._timezone(self.calendar_timezone)
+        return self
+
+
+OpsOrgCreate.model_rebuild()
+
+
+class OrgServiceTermCommand(_Request):
+    expected_sequence: Annotated[int, Field(ge=0)]
+    current_offboarding_id: UUID | None = None
+    service_start_on: date
+    service_last_access_on: date
+    contract_reference: Annotated[str, Field(min_length=1)]
+    retention_policy: OrgRetentionPeriodInput | None = None
+    reason: Annotated[str, Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _dates(self) -> OrgServiceTermCommand:
+        if self.service_last_access_on < self.service_start_on:
+            raise ValueError("service_last_access_on must not precede service_start_on")
+        return self
+
+
+class OrgLifecycleView(BaseModel):
+    org_id: UUID
+    lifecycle_status: Literal["active", "offboarding", "purging"]
+    access_status: Literal["unconfigured", "scheduled", "available", "hold", "purging"]
+    lifecycle_sequence: int
+    history_verified: bool
+    service_term_enforced: bool
+    service_term_id: UUID | None = None
+    service_start_on: date | None = None
+    service_last_access_on: date | None = None
+    service_starts_at: datetime | None = None
+    service_ends_at: datetime | None = None
+    projected_purge_eligible_at: datetime | None = None
+    service_timezone: str | None = None
+    contract_reference: str | None = None
+    pending_operation_id: UUID | None = None
+    pending_operation_status: Literal["pending", "applied", "rejected"] | None = None
+    offboarding_id: UUID | None = None
+    offboarding_started_at: datetime | None = None
+    offboarding_started_by: UUID | None = None
+    purge_eligible_at: datetime | None = None
+    retention_policy_reference: str | None = None
+    restrictions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class OrgRetentionPolicyView(BaseModel):
+    org_id: UUID
+    source: Literal["contract", "default"]
+    policy_reference: str
+    contract_reference: str | None = None
+    period_value: int
+    period_unit: RetentionUnit
+    calendar_timezone: str | None = None
+    lifecycle_sequence: int
+    history_verified: bool
+    approved_at: datetime | None = None
 
 
 class OpsAccountCreate(_Request):
@@ -116,6 +238,50 @@ class OpsAccountView(BaseModel):
     role: Role
 
 
+class OpsReasonBody(_Request):
+    reason: Reason
+
+
+class TeamChangeRequest(OpsReasonBody):
+    new_manager_account_id: UUID
+
+
+class PositionTransferRequest(OpsReasonBody):
+    new_manager_account_id: UUID
+
+
+SubjectKind = Literal["account", "candidate"]
+
+
+class SubjectRequestCreate(OpsReasonBody):
+    org_id: UUID
+    subject_kind: SubjectKind
+    subject_id: UUID
+
+
+class ErasureRequestView(BaseModel):
+    id: UUID
+    org_id: UUID
+    subject_kind: SubjectKind
+    subject_id: UUID
+    status: Literal["pending", "executed", "failed"]
+    requested_at: datetime
+    executed_at: datetime | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExportRequestView(BaseModel):
+    id: UUID
+    org_id: UUID
+    subject_kind: SubjectKind
+    subject_id: UUID
+    status: Literal["pending", "ready", "delivered", "failed"]
+    requested_at: datetime
+    ready_at: datetime | None = None
+    expires_at: datetime | None = None
+    bundle_url: str | None = None
+
+
 class AuditEntry(BaseModel):
     id: UUID
     ops_account_id: UUID
@@ -138,6 +304,16 @@ class AuditEntry(BaseModel):
 class CursorPage(BaseModel):
     next_cursor: str | None = None
     has_more: bool
+
+
+class ErasureRequestPage(BaseModel):
+    data: list[ErasureRequestView]
+    pagination: CursorPage
+
+
+class ExportRequestPage(BaseModel):
+    data: list[ExportRequestView]
+    pagination: CursorPage
 
 
 class AuditPage(BaseModel):

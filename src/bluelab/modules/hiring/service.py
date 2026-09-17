@@ -75,6 +75,17 @@ async def patch_position(session: AsyncSession, *, position_id: UUID, payload: P
 
 
 async def replace_assessment(session: AsyncSession, *, position_id: UUID, drill_ids: Sequence[UUID]) -> None:
+    # Lock the referenced drills before the position. Archive takes the drill
+    # lock before withdrawing stages, so neither path can persist a new stage
+    # against an archived drill after checking its prior published state.
+    if drill_ids:
+        await session.execute(
+            text(
+                "select id from drill where id=any(cast(:ids as uuid[])) "
+                "order by id for update"
+            ),
+            {"ids": list(drill_ids)},
+        )
     # The position row is the serialization point shared with T-7.  Without a
     # lock, an editor could delete a stage after an invite checked for one and
     # before that invite marked the assessment frozen.

@@ -140,6 +140,12 @@ class ObjectStore(Protocol):
     ) -> PresignedObject: ...
 
 
+class RestoreObjectStore(ObjectStore, Protocol):
+    """Maintenance-only enumeration capability used after a restore."""
+
+    async def list_prefix(self, prefix: str) -> list[ObjectRef]: ...
+
+
 class S3ObjectStore:
     """One S3 client for Supabase Storage, Amazon S3, or MinIO."""
 
@@ -249,6 +255,32 @@ class S3ObjectStore:
 
         url = await self._call(operation)
         return PresignedObject(url=url, expires_at=now + timedelta(seconds=lifetime))
+
+    async def list_prefix(self, prefix: str) -> list[ObjectRef]:
+        """Enumerate a closed prefix for restore reconciliation only."""
+        if prefix not in {"orgs/", "exports/"}:
+            raise ValueError("restore enumeration requires a closed prefix")
+
+        def blocking_list() -> list[ObjectRef]:
+            token: str | None = None
+            refs: list[ObjectRef] = []
+            while True:
+                arguments: dict[str, object] = {
+                    "Bucket": self._bucket,
+                    "Prefix": prefix,
+                }
+                if token is not None:
+                    arguments["ContinuationToken"] = token
+                page = self._client.list_objects_v2(**arguments)
+                refs.extend(ObjectRef(str(item["Key"])) for item in page.get("Contents", []))
+                if not page.get("IsTruncated"):
+                    return refs
+                token = str(page["NextContinuationToken"])
+
+        async def operation() -> list[ObjectRef]:
+            return await asyncio.to_thread(blocking_list)
+
+        return await self._call(operation)
 
     async def _call[T](self, operation: Callable[[], Awaitable[T]]) -> T:
         return await call_dependency(

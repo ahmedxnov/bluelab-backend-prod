@@ -23,7 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bluelab.platform.queue.catalog import Lane, spec_for, validate_payload
 from bluelab.platform.queue.compat import IncompatiblePayload, JobEnvelope
-from bluelab.platform.queue.context import job_transaction
+from bluelab.platform.queue.context import OrganizationWorkSuspended, job_transaction
+from bluelab.platform.queue.erasure_fence import subject_is_erased
 from bluelab.platform.telemetry import metrics
 from bluelab.platform.telemetry.logging import get_logger
 
@@ -108,7 +109,20 @@ class JobExecutor:
         try:
             async with job_transaction(lane, body, job_id=job_id) as (session, envelope):
                 validate_payload(lane, envelope.args)
+                if await subject_is_erased(
+                    session, lane=lane, payload=envelope.args
+                ):
+                    _logger.info("job_rejected_by_erasure_fence", lane=lane.value)
+                    return
                 await self._registration.handler(session, envelope)
+        except OrganizationWorkSuspended:
+            metrics.record_job(
+                lane=lane.value,
+                outcome=metrics.JobOutcome.SUCCESS,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
+            _logger.info("job_rejected_by_org_service_gate", lane=lane.value)
+            return
         except IncompatiblePayload:
             metrics.record_job(
                 lane=lane.value,
@@ -124,6 +138,14 @@ class JobExecutor:
             ):
                 try:
                     await self._run_exhaustion(body=body, job_id=job_id)
+                except OrganizationWorkSuspended:
+                    metrics.record_job(
+                        lane=lane.value,
+                        outcome=metrics.JobOutcome.SUCCESS,
+                        duration_ms=duration_ms,
+                    )
+                    _logger.info("job_rejected_by_org_service_gate", lane=lane.value)
+                    return
                 except Exception:  # noqa: BLE001 -- retry sanitized terminal action
                     metrics.record_job(
                         lane=lane.value,
@@ -188,7 +210,7 @@ def build_worker_app(
     database_url: str,
     registrations: Iterable[JobRegistration],
     *,
-    queues: Iterable[Lane],
+    queues: Iterable[str],
     concurrency: int,
     compatibility_delay_seconds: int,
 ) -> procrastinate.App:
@@ -197,7 +219,10 @@ def build_worker_app(
     selected = tuple(dict.fromkeys(queues))
     if not selected:
         raise ValueError("a worker must listen to at least one lane")
-    missing = [lane.value for lane in selected if lane not in registrations_by_lane]
+    missing = [
+        lane for lane in selected
+        if lane != "maintenance" and Lane(lane) not in registrations_by_lane
+    ]
     if missing:
         raise ValueError(f"worker has no handler for configured lanes: {missing}")
 
@@ -208,8 +233,9 @@ def build_worker_app(
     )
     app = procrastinate.App(
         connector=connector,
+        periodic_defaults={"max_delay": 86_400.0},
         worker_defaults={
-            "queues": [lane.value for lane in selected],
+            "queues": list(selected),
             "concurrency": concurrency,
             "shutdown_graceful_timeout": 30.0,
             "delete_jobs": "never",
@@ -218,16 +244,18 @@ def build_worker_app(
     )
 
     for lane in selected:
-        registration = registrations_by_lane[lane]
+        if lane == "maintenance":
+            continue
+        registration = registrations_by_lane[Lane(lane)]
         executor = JobExecutor(registration)
         execute = _task_for(executor)
-        execute.__name__ = f"execute_{lane.value}"
+        execute.__name__ = f"execute_{lane}"
         app.task(
-            name=lane.value,
-            queue=lane.value,
+            name=lane,
+            queue=lane,
             pass_context=True,
             retry=LaneRetryStrategy(
-                lane,
+                Lane(lane),
                 compatibility_delay_seconds=compatibility_delay_seconds,
             ),
         )(execute)

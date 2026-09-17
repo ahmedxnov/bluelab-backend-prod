@@ -158,8 +158,8 @@ async def world(training_engine, clean_training_legal_catalog) -> AsyncIterator[
 
         await s.execute(
             text(
-                "insert into org (id, name, registered_domain, timezone)"
-                " values (:id, 'Training Org', 'training.example', 'UTC')"
+                "insert into org (id, name, registered_domain, timezone, service_term_enforced)"
+                " values (:id, 'Training Org', 'training.example', 'UTC', false)"
             ),
             {"id": ids["org"]},
         )
@@ -634,8 +634,8 @@ async def team_world(training_engine, clean_training_legal_catalog) -> AsyncIter
     async with maker() as s, s.begin():
         await s.execute(
             text(
-                "insert into org (id, name, registered_domain, timezone)"
-                " values (:id, 'Team Org', 'team.example', 'UTC')"
+                "insert into org (id, name, registered_domain, timezone, service_term_enforced)"
+                " values (:id, 'Team Org', 'team.example', 'UTC', false)"
             ),
             {"id": org},
         )

@@ -91,6 +91,34 @@ class Settings(BaseSettings):
     object_presign_seconds: int = Field(
         default=300, ge=1, le=300, alias="OBJECT_PRESIGN_SECONDS"
     )
+    erasure_ledger_bucket: str = Field(
+        default="bluelab-erasure-ledger", alias="ERASURE_LEDGER_BUCKET"
+    )
+    lifecycle_history_bucket: str = Field(
+        default="bluelab-lifecycle-history", alias="LIFECYCLE_HISTORY_BUCKET"
+    )
+    lifecycle_history_kms_key_id: str | None = Field(
+        default=None, alias="LIFECYCLE_HISTORY_KMS_KEY_ID"
+    )
+    erasure_backup_ledger_bucket: str = Field(
+        default="bluelab-erasure-ledger-backup",
+        alias="ERASURE_BACKUP_LEDGER_BUCKET",
+    )
+    erasure_backup_endpoint: str | None = Field(
+        default=None, alias="ERASURE_BACKUP_ENDPOINT"
+    )
+    erasure_backup_region: str | None = Field(
+        default=None, alias="ERASURE_BACKUP_REGION"
+    )
+    erasure_backup_access_key: SecretStr | None = Field(
+        default=None, alias="ERASURE_BACKUP_ACCESS_KEY"
+    )
+    erasure_backup_secret_key: SecretStr | None = Field(
+        default=None, alias="ERASURE_BACKUP_SECRET_KEY"
+    )
+    erasure_ledger_kms_key_id: str | None = Field(
+        default=None, alias="ERASURE_LEDGER_KMS_KEY_ID"
+    )
 
     # ── shared external-call bounds (architecture/04 §2) ─────────────────────
     dependency_timeout_seconds: float = Field(
@@ -115,7 +143,7 @@ class Settings(BaseSettings):
     # ── work plane (ADR-0023; infra/02 §4) ───────────────────────────────────
     # Deployments select lanes independently, which is how per-type concurrency
     # is configured without changing the common application image.
-    worker_queues: str = Field(default="dispatch_email", alias="WORKER_QUEUES")
+    worker_queues: str = Field(default="dispatch_email,maintenance", alias="WORKER_QUEUES")
     worker_concurrency: int = Field(default=10, ge=1, le=100, alias="WORKER_CONCURRENCY")
     worker_compatibility_delay_seconds: int = Field(
         default=5, ge=1, le=300, alias="WORKER_COMPATIBILITY_DELAY_SECONDS"
@@ -288,6 +316,12 @@ class Settings(BaseSettings):
             raise ValueError(
                 "OBJECT_STORE_ACCESS_KEY and OBJECT_STORE_SECRET_KEY must be set together"
             )
+        if (self.erasure_backup_access_key is None) != (
+            self.erasure_backup_secret_key is None
+        ):
+            raise ValueError(
+                "ERASURE_BACKUP_ACCESS_KEY and ERASURE_BACKUP_SECRET_KEY must be set together"
+            )
         app_url = urlsplit(self.public_app_url)
         if (
             app_url.scheme not in {"http", "https"}
@@ -313,13 +347,16 @@ class Settings(BaseSettings):
         return self
 
     @property
-    def worker_queue_names(self) -> tuple[Lane, ...]:
+    def worker_queue_names(self) -> tuple[str, ...]:
         """The configured, de-duplicated lanes in stable order."""
         raw_names = [item.strip() for item in self.worker_queues.split(",")]
         if not raw_names or any(not item for item in raw_names):
             raise ValueError("WORKER_QUEUES must name at least one queue")
         try:
-            lanes = tuple(Lane(item) for item in raw_names)
+            lanes = tuple(
+                "maintenance" if item == "maintenance" else Lane(item).value
+                for item in raw_names
+            )
         except ValueError as exc:
             raise ValueError("WORKER_QUEUES contains an unknown queue") from exc
         return tuple(dict.fromkeys(lanes))

@@ -1,18 +1,7 @@
 {
   "note": "Contract elements with no implementation yet (api C-2, ADR-0035). This list may only shrink.",
-  "count": 13,
+  "count": 2,
   "gaps": [
-    "operation:GET /ops/v1/erasure-requests",
-    "operation:GET /ops/v1/erasure-requests/{request_id}",
-    "operation:GET /ops/v1/export-requests",
-    "operation:GET /ops/v1/export-requests/{request_id}",
-    "operation:POST /api/v1/drills/{drill_id}/archive",
-    "operation:POST /api/v1/positions/{position_id}/close",
-    "operation:POST /ops/v1/accounts/{account_id}/deactivate",
-    "operation:POST /ops/v1/accounts/{account_id}/team-change",
-    "operation:POST /ops/v1/erasure-requests",
-    "operation:POST /ops/v1/export-requests",
-    "operation:POST /ops/v1/positions/{position_id}/transfer",
     "problem:method-not-allowed",
     "problem:recipient-confirmation-required"
   ]

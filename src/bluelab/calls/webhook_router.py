@@ -15,6 +15,7 @@ from bluelab.calls.egress import (
     attempt_status,
     delete_orphan_recording,
     reconcile_recording,
+    recording_status,
 )
 from bluelab.calls.interruption import Disposition, interrupt
 from bluelab.calls.lease import CallLeaseStore
@@ -88,9 +89,10 @@ async def livekit_webhook(request: Request, settings: SettingsDep) -> Response:
             async with scoped_transaction(lifecycle_scope(call)) as db:
                 reconciled = await reconcile_recording(db, call, available=available)
                 interrupted = await attempt_status(db, call) == "interrupted"
+                erased = await recording_status(db, call) == "erased"
             if reconciled:
                 await registry.recording_resolved(call.call_id)
-            elif available and interrupted:
+            elif available and (interrupted or erased):
                 await delete_orphan_recording(settings, call)
                 await registry.recording_resolved(call.call_id)
     elif event.event in {"room_finished", "participant_connection_aborted"}:

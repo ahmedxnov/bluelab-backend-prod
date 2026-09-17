@@ -29,7 +29,13 @@ from bluelab.adapters.object_store import ObjectRef
 from bluelab.calls.bundle_builder import build_bundle
 from bluelab.calls.completion import TranscriptRow, complete
 from bluelab.calls.deps import get_call_valkey
-from bluelab.calls.egress import EgressRegistry, reconcile_recording, start_recording
+from bluelab.calls.egress import (
+    EgressRegistry,
+    delete_orphan_recording,
+    reconcile_recording,
+    recording_status,
+    start_recording,
+)
 from bluelab.calls.interruption import Disposition, interrupt
 from bluelab.calls.lease import CallLease, CallLeaseStore
 from bluelab.calls.registry import (
@@ -228,7 +234,11 @@ async def runtime_completion(
             reconciled = await reconcile_recording(
                 db, call, available=egress_outcome
             )
+            erased = await recording_status(db, call) == "erased"
         if reconciled:
+            await CallRegistry(get_call_valkey(request)).recording_resolved(call.call_id)
+        elif egress_outcome and erased:
+            await delete_orphan_recording(settings, call)
             await CallRegistry(get_call_valkey(request)).recording_resolved(call.call_id)
     metrics.record_call_disposition(
         outcome="completed", duration_seconds=body.duration_seconds

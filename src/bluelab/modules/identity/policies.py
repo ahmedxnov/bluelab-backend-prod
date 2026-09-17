@@ -35,6 +35,24 @@ ORG = REGISTRY.register(
 )
 """The org row is its own scope: `id`, not `org_id`, is what the predicate binds."""
 
+ORG_SERVICE_TERM = REGISTRY.register(
+    TablePolicy(
+        table="org_service_term",
+        policy_class=PolicyClass.P9_OPS,
+        org_scoped=True,
+        team_scoped=False,
+    )
+)
+
+ORG_RETENTION_POLICY = REGISTRY.register(
+    TablePolicy(
+        table="org_retention_policy",
+        policy_class=PolicyClass.P9_OPS,
+        org_scoped=True,
+        team_scoped=False,
+    )
+)
+
 ACCOUNT = REGISTRY.register(
     TablePolicy(
         table="account",
@@ -109,6 +127,8 @@ position's invites (architecture/02 §3.2).
 DECLARED = (
     LEGAL_DOCUMENT_VERSION,
     ORG,
+    ORG_SERVICE_TERM,
+    ORG_RETENTION_POLICY,
     ACCOUNT,
     CONSENT_RECORD,
     TERMS_ACCEPTANCE,

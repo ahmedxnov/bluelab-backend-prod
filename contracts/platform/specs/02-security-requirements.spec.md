@@ -102,6 +102,21 @@ A cross-scope reference shall answer `404` identically in status, body, **and ti
 **Verified by:** response-body equality and a timing-distribution comparison between absent and cross-scope ids
 under load show no distinguishable difference.
 
+### SEC-042: Organization lifecycle authorization gate `[Must]`
+An organization outside its confirmed service interval or in `offboarding` or `purging` shall grant no
+ordinary access through account sessions, candidate tokens, integration callbacks, or background jobs.
+The access gate shall compare persisted UTC term boundaries at admission and write commit, even if the
+term-transition job is late. It shall apply to already-issued credentials and sessions, take precedence
+over otherwise valid candidate tokens, and refuse new ordinary media and report URL issuance. At the
+service end instant, established calls terminate and in-flight writes are fenced. Immediate early
+termination shall fence writes before its durable decision boundary and account for capture before
+acceptance. Required subject-rights and offboarding work shall use narrowly authorized paths; renewal shall preserve
+independent account and credential state.
+**Verified by:** existing and new account sessions, original and resent candidate tokens, token exchange,
+integration callbacks, delayed workers, concurrent writes, and an established call cannot continue ordinary
+access or commit after the boundary; permitted paths remain scoped and audited; renewal does not
+reactivate an independently disabled account or revoked credential.
+
 ## 3. Email egress & output handling (security/02, security/05)
 
 ### SEC-011: Shortlist recipient confirmation `[Must]`
@@ -123,9 +138,14 @@ only after authorization**, never by a durable or broadly-scoped link; the URL s
 or access log, and its lifetime shall be the minimum the playback/download flow needs. A presigned URL is a
 bearer capability to the most sensitive asset and is treated as one — the [05 §2](../security/05-data-protection-and-secrets.security.md)
 "DC-4 never travels in a URL" rule is honored by keeping the *content* out of the URL while bounding the *access
-grant* the URL represents.
+grant* the URL represents. Already-issued URLs may remain usable until expiry after organization suspension.
+Every ordinary media issuance path shall cap the URL lifetime at 15 minutes from issuance. Existing
+longer-lived grants are revoked, expire under an independently verified bound, or keep organization
+offboarding enablement blocked until treated. Subject-rights delivery uses a separate audited grant
+with its own maximum lifetime and artifact cleanup rule.
 **Verified by:** an issued URL scopes to exactly one object, expires within the short window, and appears in no
-log; an expired URL is refused; access requires a prior authorization.
+log; an expired URL is refused; access requires a prior authorization; suspension stops new ordinary issuance;
+the 15-minute maximum covers every ordinary issuance path and any longer-lived grant receives explicit treatment.
 
 ### SEC-020: Output encoding at every sink `[Must]`
 All model-generated, transcript-derived, and user-supplied text shall be output-encoded for its rendering
@@ -208,17 +228,36 @@ text; extraction failure leaves live facts untouched.
 
 ### SEC-018: Erasure completeness and restore honesty `[Must]`
 Erasure shall remove the person's identifying, contact, and content data across the database and object store,
-leave only the statistical residue, verify zero-remain, and record per-category evidence; every restore shall
-replay executed erasures so no restore resurrects an erased subject; erasure shall propagate to backup copies
-within 24 hours. Erasure shall **quiesce the subject's in-flight and queued work** — cancel or await any pending
+leave only the statistical residue, verify zero-remain, and record per-category evidence. Before subject
+mutation, execution shall synchronously persist an immutable replay marker to a live compliance ledger and
+its off-provider backup; either write failing shall block mutation. Every restore shall replay each armed
+erasure whose zero-remain completion is absent from the restored database before ordinary workers resume;
+erasure shall propagate to backup copies within 24 hours. Erasure shall **quiesce the subject's in-flight and
+queued work** — cancel or await any pending
 grading, report-render, or synthesis job for the subject before zero-remain verification, and a worker shall
 **abort if its subject has been erased** — so no job completing after erasure re-writes the person's data (an
 idempotent insert offers no protection here: the rows were deleted, so there is no conflict to suppress).
 **Verified by:** an executed erasure leaves no transcript/moment/PII/object; a restore-then-reconcile of a point
-before an erasure re-applies it; the off-copy reflects the deletion within a day; **a job enqueued before an
+before request creation reconstructs and reapplies it from the independent ledger; a failed ledger write
+performs no mutation; the off-copy reflects the deletion within a day; **a job enqueued before an
 erasure and run after it writes nothing about the subject** (routed to the erasure procedure —
 [security/08 RB-11](../security/08-security-requirements-and-routebacks.security.md)).
 *(Realizes [CMP-001](01-nfr-and-compliance.spec.md) erasure; the posture is [OQ-1](../data/README.md).)*
+
+### SEC-043: Service and offboarding decision recovery and purge containment `[Must]`
+Accepted service terms, renewals, organization lifecycle decisions, and purge outcomes shall remain verifiable after application-database
+rollback. Every recovery path capable of reintroducing organization data shall isolate affected records and
+objects from customer traffic, integration writes, ordinary workers, and direct object access until the
+authoritative lifecycle history, its independently protected current head, and subject-erasure obligations
+are reconciled ([ADR-0073](../architecture/adr/0073-independent-organization-lifecycle-history.md)). Missing or stale lifecycle
+history shall keep affected data isolated and prevent new lifecycle decisions. Automatic organization purge
+shall remain disabled until the approved deletion matrix, ledger-integrity proof, worker fencing, and joint
+database/object recovery tests establish complete and recoverable deletion.
+**Verified by:** restore before term confirmation, expiry, renewal, early termination, cancellation,
+deadline extension, policy revision,
+restriction creation or release, partial purge, and completed purge; orphaned restriction;
+object-store-only resync; surviving bearer URL against restored objects; incomplete ledger history; and joint
+subject-erasure replay all fail closed until the correct current state is verified.
 
 ### SEC-019: Secret scoping and blast-radius bound `[Must]`
 Secrets shall be stored in a managed secret store (or SecureString parameters at the demo tier), never in code,

@@ -200,8 +200,8 @@ async def _seed(session: AsyncSession, i: dict[str, UUID]) -> None:
 
     for org, name in ((i["org_a"], "Org A"), (i["org_b"], "Org B")):
         await ex(
-            "insert into org (id, name, registered_domain, timezone)"
-            " values (:id, :n, :domain, 'Africa/Cairo')",
+            "insert into org (id, name, registered_domain, timezone, service_term_enforced)"
+            " values (:id, :n, :domain, 'Africa/Cairo', false)",
             id=org,
             n=name,
             domain=f"{name.lower()}.example",

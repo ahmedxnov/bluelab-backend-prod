@@ -52,8 +52,8 @@ async def base_org(engine) -> dict[str, UUID]:
     async with maker() as s, s.begin():
         await s.execute(
             text(
-                "insert into org (id, name, registered_domain, timezone)"
-                " values (:id, 'Freeze', 'freeze.example', 'Africa/Cairo')"
+                "insert into org (id, name, registered_domain, timezone, service_term_enforced)"
+                " values (:id, 'Freeze', 'freeze.example', 'Africa/Cairo', false)"
             ),
             {"id": ids["org"]},
         )

@@ -38,8 +38,9 @@ rather than with the caller's good intentions.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import StrEnum
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -57,6 +58,8 @@ from bluelab.modules.identity.models import (
     Account,
     LegalDocumentVersion,
     Org,
+    OrgRetentionPolicy,
+    OrgServiceTerm,
 )
 from bluelab.modules.identity.schemas import (
     Gate,
@@ -719,6 +722,86 @@ async def provision_org(
     session.add(org)
     await session.flush()
     return org
+
+
+async def lifecycle_projection(
+    session: AsyncSession, org_id: UUID, *, lock: bool = False
+) -> tuple[Org, OrgServiceTerm | None, OrgRetentionPolicy | None] | None:
+    """Expose this module's lifecycle projection to authorized ops services."""
+    statement = select(Org).where(Org.id == org_id)
+    if lock:
+        statement = statement.with_for_update()
+    org = (await session.execute(statement)).scalar_one_or_none()
+    if org is None:
+        return None
+    term = (
+        (await session.execute(
+            select(OrgServiceTerm).where(OrgServiceTerm.id == org.current_service_term_id)
+        )).scalar_one_or_none()
+        if org.current_service_term_id else None
+    )
+    policy = (await session.execute(
+        select(OrgRetentionPolicy).where(OrgRetentionPolicy.org_id == org_id)
+    )).scalar_one_or_none()
+    return org, term, policy
+
+
+async def apply_org_service_term(
+    session: AsyncSession,
+    *,
+    org: Org,
+    term_id: UUID,
+    sequence: int,
+    start_on: date,
+    last_access_on: date,
+    starts_at: datetime,
+    ends_at: datetime,
+    contract_reference: str,
+    retention_policy_reference: str,
+    confirmed_by: UUID,
+    confirmed_at: datetime,
+    reason: str,
+    custom_policy: dict[str, Any] | None,
+) -> None:
+    """Apply one accepted independent decision within the ops audit transaction."""
+    session.add(OrgServiceTerm(
+        id=term_id, org_id=org.id, lifecycle_sequence=sequence,
+        start_on=start_on, last_access_on=last_access_on,
+        calendar_timezone=org.timezone, starts_at=starts_at, ends_at=ends_at,
+        contract_reference=contract_reference,
+        retention_policy_reference=retention_policy_reference,
+        confirmed_by=confirmed_by, confirmed_at=confirmed_at, reason=reason,
+    ))
+    await session.flush()
+    org.current_service_term_id = term_id
+    org.service_starts_at = starts_at
+    org.service_ends_at = ends_at
+    org.service_term_enforced = True
+    org.lifecycle_sequence = sequence
+    org.lifecycle_status = "active"
+    org.offboarding_id = None
+    org.offboarding_started_at = None
+    org.offboarding_started_by = None
+    org.purge_eligible_at = None
+    org.retention_policy_reference = None
+    if custom_policy is not None:
+        existing = (await session.execute(
+            select(OrgRetentionPolicy).where(OrgRetentionPolicy.org_id == org.id)
+        )).scalar_one_or_none()
+        values = {
+            "policy_reference": str(custom_policy["policy_reference"]),
+            "contract_reference": contract_reference,
+            "period_value": int(custom_policy["period_value"]),
+            "period_unit": str(custom_policy["period_unit"]),
+            "calendar_timezone": custom_policy.get("calendar_timezone"),
+            "effective_sequence": sequence, "approved_at": confirmed_at,
+            "approved_by": confirmed_by, "reason": reason,
+        }
+        if existing is None:
+            session.add(OrgRetentionPolicy(org_id=org.id, **values))
+        else:
+            for key, value in values.items():
+                setattr(existing, key, value)
 
 
 @dataclass(frozen=True, slots=True)

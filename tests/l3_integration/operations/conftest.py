@@ -104,6 +104,19 @@ async def ops_world(operations_engine) -> AsyncIterator[OpsWorld]:
         )
         if org_ids:
             await db.execute(
+                text("update org set current_service_term_id=null, service_starts_at=null, "
+                     "service_ends_at=null, lifecycle_status='active', offboarding_id=null, "
+                     "offboarding_started_at=null, offboarding_started_by=null, "
+                     "purge_eligible_at=null, retention_policy_reference=null "
+                     "where id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            for table in ("org_service_term", "org_retention_policy", "org_lifecycle_operation"):
+                await db.execute(
+                    text(f"delete from {table} where org_id = any(:org_ids)"),
+                    {"org_ids": org_ids},
+                )
+            await db.execute(
                 text(
                     "delete from procrastinate_jobs"
                     " where args ->> 'org_id' = any(cast(:org_ids as text[]))"

@@ -29,6 +29,9 @@ obligation, stated so the gate can check nothing silently fell between contract 
 | FR-IDA-011 | `POST /positions/{id}/invites` issues bound tokens (T-7); bearer scheme `candidateToken`; binding validated per request (ADR-0037) |
 | FR-IDA-012 | Token validation window on every `/assessment*` + `/calls` call; resend keeps prior token valid (AC-IDA-005 — many-tokens→one-candidate validation set) |
 | FR-IDA-013 | Completed: every candidate endpoint except `GET /assessment` answers `409 assessment-completed`; `GET /assessment` serves only `completion`. Expired: `401 token-expired` with explanation |
+| FR-IDA-014 | Confirmed service start/end and lifecycle gate semantics in [00 §4](00-contract-overview.api.md); suspended access returns `organization-suspended` ([03 §2.3](03-error-catalog.api.md)) |
+| FR-IDA-015 | Durable operator command identity in [ADR-0040](adr/0040-idempotency-strategy.md); service-term preview, provisioning, renewal, early termination, retention-policy, restriction, and purge-inspection operations in [OpenAPI](openapi.yaml) |
+| FR-IDA-016 | Renewal and early-termination cancellation responses and independent account-state rules in [OpenAPI](openapi.yaml) and [00 §4](00-contract-overview.api.md) |
 
 ## FR-KNW — Knowledge
 
@@ -87,6 +90,7 @@ obligation, stated so the gate can check nothing silently fell between contract 
 | FR-LIV-014 | F-2 §5: 30 s reconnection grace then interrupted (T-6), never graded |
 | FR-LIV-015 | T-6 reverses allowance for rep/author (AC-LIV-006); candidate → restart policy (FR-CND-010) |
 | FR-LIV-016 | Never-established: join deadline + `DELETE /calls/current` + `503 call-capacity` — nothing recorded or consumed, retry offered |
+| FR-LIV-017 | Offboarding fence and mode-specific attempt and capture disposition in [01 §§2–6](01-realtime-call-contract.api.md) |
 
 ## FR-SCR — Scoring & Review
 
@@ -207,8 +211,9 @@ obligation, stated so the gate can check nothing silently fell between contract 
 
 ## Coverage statement
 
-All 131 functional requirements across the nine families have at least one realizing contract element
-above; the gate's walkthrough exercises each row from the consumer side against the mock server
-([ADR-0035](adr/0035-contract-first-openapi.md); see [README §Gate](README.md)). Rows marked SPA name
-client obligations the Phase 6/13 work inherits; rows citing F-2/F-3 are testable against the contract
-documents' schemas rather than the mock.
+The matrix maps the functional requirements across the nine families to their interfaces.
+Organization lifecycle operations and problem types are specified in [OpenAPI](openapi.yaml) and
+[03](03-error-catalog.api.md); [01](01-realtime-call-contract.api.md) specifies call disposition.
+Rows marked SPA name client obligations, and rows citing F-2/F-3 are testable against those contracts.
+The [organization-purge enablement gate](../data/03-lifecycle-retention-erasure.data.md) controls
+production availability.

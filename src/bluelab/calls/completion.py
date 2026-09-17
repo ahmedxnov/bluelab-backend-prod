@@ -134,6 +134,34 @@ async def complete(
     """
     import json
 
+    participant = (
+        await session.execute(
+            text(
+                "select rep_account_id,candidate_id from attempt where id=:attempt"
+            ),
+            {"attempt": attempt_id},
+        )
+    ).mappings().one_or_none()
+    if participant is None:
+        return False
+    subject_kind = (
+        "account" if participant["rep_account_id"] is not None else "candidate"
+    )
+    subject_id = participant["rep_account_id"] or participant["candidate_id"]
+    await session.execute(
+        text("select pg_advisory_xact_lock(hashtextextended(:subject,0))"),
+        {"subject": str(subject_id)},
+    )
+    fenced = await session.scalar(
+        text(
+            "select exists(select 1 from erasure_request where org_id=:org "
+            "and subject_kind=:kind and subject_id=:subject)"
+        ),
+        {"org": org_id, "kind": subject_kind, "subject": subject_id},
+    )
+    if fenced:
+        return False
+
     # CLAIM FIRST, then write. The obvious order — transcript, then a conditional
     # status flip — is wrong on the replay path: the transcript insert hits
     # `trg_scorecard_freeze` (the attempt has already left `in_progress`) and

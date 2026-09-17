@@ -14,7 +14,7 @@ because the specification defines none (data/00 §3, FR-IDA-009).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import CheckConstraint, ForeignKey, Index, UniqueConstraint, text
@@ -81,6 +81,74 @@ class Org(UUIDPrimaryKey, Timestamped, Base):
     `platform.clock.month_window`.
     """
 
+    service_term_enforced: Mapped[bool] = mapped_column(
+        nullable=False, server_default=text("true")
+    )
+    service_starts_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    service_ends_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    current_service_term_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    lifecycle_status: Mapped[str] = mapped_column(
+        nullable=False, server_default=text("'active'")
+    )
+    lifecycle_sequence: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
+    offboarding_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    offboarding_started_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    offboarding_started_by: Mapped[UUID | None] = mapped_column(nullable=True)
+    purge_eligible_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    retention_policy_reference: Mapped[str | None] = mapped_column(nullable=True)
+
+
+class OrgServiceTerm(UUIDPrimaryKey, Base):
+    """Immutable projection of a confirmed term in independent lifecycle history."""
+
+    __tablename__ = "org_service_term"
+
+    org_id: Mapped[UUID] = mapped_column(ForeignKey("org.id"), nullable=False)
+    lifecycle_sequence: Mapped[int] = mapped_column(nullable=False)
+    start_on: Mapped[date] = mapped_column(nullable=False)
+    last_access_on: Mapped[date] = mapped_column(nullable=False)
+    calendar_timezone: Mapped[str] = mapped_column(nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(nullable=False)
+    contract_reference: Mapped[str] = mapped_column(nullable=False)
+    retention_policy_reference: Mapped[str] = mapped_column(nullable=False)
+    confirmed_by: Mapped[UUID] = mapped_column(nullable=False)
+    confirmed_at: Mapped[datetime] = mapped_column(nullable=False)
+    reason: Mapped[str] = mapped_column(nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "lifecycle_sequence"),
+        scope_key("org_id", "id"),
+        CheckConstraint("last_access_on >= start_on and ends_at > starts_at", name="valid_term"),
+    )
+
+
+class OrgRetentionPolicy(Base):
+    """Current approved contractual retention policy projection."""
+
+    __tablename__ = "org_retention_policy"
+
+    org_id: Mapped[UUID] = mapped_column(ForeignKey("org.id"), primary_key=True)
+    policy_reference: Mapped[str] = mapped_column(nullable=False)
+    contract_reference: Mapped[str] = mapped_column(nullable=False)
+    period_value: Mapped[int] = mapped_column(nullable=False)
+    period_unit: Mapped[str] = mapped_column(nullable=False)
+    calendar_timezone: Mapped[str | None] = mapped_column(nullable=True)
+    effective_sequence: Mapped[int] = mapped_column(nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(nullable=False)
+    approved_by: Mapped[UUID] = mapped_column(nullable=False)
+    reason: Mapped[str] = mapped_column(nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("period_value > 0 and effective_sequence > 0", name="valid_policy_values"),
+        enum_check("period_unit", ("elapsed_days", "calendar_days", "calendar_months")),
+        CheckConstraint(
+            "(period_unit = 'elapsed_days' and calendar_timezone is null) or "
+            "(period_unit in ('calendar_days','calendar_months') and calendar_timezone is not null)",
+            name="policy_timezone",
+        ),
+    )
+
 
 class Account(UUIDPrimaryKey, Mutable, Base):
     """Manager and rep accounts (FR-IDA-001/007).
@@ -99,7 +167,7 @@ class Account(UUIDPrimaryKey, Mutable, Base):
 
     display_name: Mapped[str] = mapped_column(nullable=False)
     role: Mapped[str] = mapped_column(nullable=False)
-    password_hash: Mapped[str] = mapped_column(nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(nullable=True)
 
     credential_state: Mapped[str] = mapped_column(nullable=False, server_default=text("'initial'"))
     """`initial` until the first-sign-in gate completes (FR-IDA-004)."""

@@ -142,6 +142,28 @@ _INSERT_ATTEMPT = text(
     """
 )
 
+_ORG_CALL_ACCESS = text(
+    "select o.lifecycle_status, o.service_term_enforced, o.service_starts_at, "
+    "o.service_ends_at, clock_timestamp() as checked_at, "
+    "exists(select 1 from org_lifecycle_operation p where p.org_id=o.id "
+    "and p.status='pending') as pending "
+    "from org o where o.id=:org for share"
+)
+
+
+async def require_call_service_access(session: AsyncSession, org_id: UUID) -> None:
+    """Fence the system-scoped internal call seam at the current service instant."""
+    state = (await session.execute(_ORG_CALL_ACCESS, {"org": org_id})).one_or_none()
+    if state is None or state.lifecycle_status != "active" or state.pending:
+        raise ProblemError(catalog.ORGANIZATION_SUSPENDED)
+    if state.service_term_enforced and (
+        state.service_starts_at is None
+        or state.service_ends_at is None
+        or state.checked_at < state.service_starts_at
+        or state.checked_at >= state.service_ends_at
+    ):
+        raise ProblemError(catalog.ORGANIZATION_SUSPENDED)
+
 
 async def admit(
     session: AsyncSession, request: AdmissionRequest, *, consent_version: str
@@ -153,6 +175,28 @@ async def admit(
             `409 stage-not-next`, or `409 stage-consumed`. Each maps to a
             designed UX state (ux/05 §3.4) — none is a generic failure.
     """
+    await require_call_service_access(session, request.org_id)
+    subject_kind = "candidate" if request.candidate_id is not None else "account"
+    subject_id = request.candidate_id or request.account_id
+    if subject_id is not None:
+        await session.execute(
+            text("select pg_advisory_xact_lock(hashtextextended(:subject,0))"),
+            {"subject": str(subject_id)},
+        )
+        fenced = await session.scalar(
+            text(
+                "select exists(select 1 from erasure_request where org_id=:org "
+                "and subject_kind=:kind and subject_id=:subject)"
+            ),
+            {
+                "org": request.org_id,
+                "kind": subject_kind,
+                "subject": subject_id,
+            },
+        )
+        if fenced:
+            raise ProblemError(catalog.TOKEN_INVALID)
+
     if not await has_current_consent(
         session,
         account_id=request.account_id,

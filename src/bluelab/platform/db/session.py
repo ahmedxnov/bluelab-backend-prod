@@ -32,10 +32,25 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from bluelab.platform.db.engine import get_engine
-from bluelab.platform.db.scope import ScopeContext, apply_scope
+from bluelab.platform.db.scope import PrincipalKind, ScopeContext, apply_scope
+from bluelab.platform.errors import catalog
+from bluelab.platform.errors.denial import ProblemError
+
+_ORG_SERVICE_ACCESS = text("select app_org_service_access()")
+
+
+async def org_service_access_allowed(session: AsyncSession) -> bool:
+    """Check the scoped organization's current service term while locking its row."""
+    return bool((await session.execute(_ORG_SERVICE_ACCESS)).scalar_one())
+
+
+async def _require_org_service_access(session: AsyncSession) -> None:
+    if not await org_service_access_allowed(session):
+        raise ProblemError(catalog.ORGANIZATION_SUSPENDED)
 
 
 @lru_cache(maxsize=1)
@@ -72,7 +87,14 @@ async def scoped_transaction(scope: ScopeContext) -> AsyncIterator[AsyncSession]
     async with _sessionmaker()() as session, session.begin():
         # Before any statement that could touch a customer-data table.
         await apply_scope(session, scope)
+        ordinary = scope.principal_kind in (PrincipalKind.ACCOUNT, PrincipalKind.CANDIDATE)
+        if ordinary:
+            await _require_org_service_access(session)
         yield session
+        # A request can start before a term cutoff and finish after it. Keep the
+        # org row's SHARE lock through this final clock check and the commit.
+        if ordinary:
+            await _require_org_service_access(session)
 
 
 @asynccontextmanager

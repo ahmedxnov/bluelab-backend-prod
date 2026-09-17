@@ -6,7 +6,7 @@ from the store, which is what makes at-least-once retry safe.
 
 ## The catalogue is closed, and enforced closed
 
-Six lanes exist. `enqueue()` rejects a name that is not one of them, the same way
+Eight lanes exist. `enqueue()` rejects a name that is not one of them, the same way
 the email dispatcher rejects a `kind` outside the inventory of five. A queue that
 accepts arbitrary job names grows a seventh lane nobody designed, with no
 idempotency identity and no failure surface.
@@ -37,7 +37,7 @@ from uuid import UUID
 
 
 class Lane(StrEnum):
-    """The six job lanes. The set is closed (api/02 §2)."""
+    """The eight job lanes. The set is closed (api/02 §2)."""
 
     GRADE_ATTEMPT = "grade_attempt"
     GENERATE_SCENARIO = "generate_scenario"
@@ -45,6 +45,8 @@ class Lane(StrEnum):
     EXTRACT_FACTS = "extract_facts"
     RENDER_REPORT = "render_report"
     DISPATCH_EMAIL = "dispatch_email"
+    EXECUTE_ERASURE = "execute_erasure"
+    EXECUTE_EXPORT = "execute_export"
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +143,25 @@ SPECS: Final[dict[Lane, LaneSpec]] = {
             "who ignored it (FR-HIR-010)"
         ),
     ),
+    Lane.EXECUTE_ERASURE: LaneSpec(
+        lane=Lane.EXECUTE_ERASURE,
+        payload_keys=frozenset({"request_id"}),
+        idempotency=(
+            "erasure_request.id; immutable ledger markers, the database procedure, "
+            "exact-key object deletes, and zero-remain verification converge on replay"
+        ),
+        max_attempts=5,
+        retry_exhausted=(
+            "status='failed' with content-free evidence; the permanent subject fence remains"
+        ),
+    ),
+    Lane.EXECUTE_EXPORT: LaneSpec(
+        lane=Lane.EXECUTE_EXPORT,
+        payload_keys=frozenset({"request_id"}),
+        idempotency="export_request.id and fixed exports/{request_id}.zip object key",
+        max_attempts=5,
+        retry_exhausted="status='failed'; a partial fixed-key bundle is removed by reconciliation",
+    ),
 }
 
 
@@ -152,7 +173,7 @@ def spec_for(lane: str | Lane) -> LaneSpec:
     """Look up a lane's contract.
 
     Raises:
-        UnknownLane: If the name is not one of the six.
+        UnknownLane: If the name is not one of the eight.
     """
     try:
         return SPECS[Lane(lane)]

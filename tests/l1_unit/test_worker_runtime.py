@@ -12,6 +12,7 @@ from procrastinate.jobs import Job
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bluelab.entrypoints import worker_health
+from bluelab.platform.queue import context as queue_context
 from bluelab.platform.queue import runtime
 from bluelab.platform.queue.catalog import Lane, spec_for, validate_payload
 from bluelab.platform.queue.compat import (
@@ -20,6 +21,7 @@ from bluelab.platform.queue.compat import (
     envelope,
     read,
 )
+from bluelab.platform.queue.context import OrganizationWorkSuspended, job_transaction
 from bluelab.platform.queue.runtime import (
     JobExecutor,
     JobRegistration,
@@ -117,6 +119,11 @@ async def test_terminal_action_runs_after_failed_attempt_rollback(monkeypatch):
         events.append("exhausted")
 
     monkeypatch.setattr(runtime, "job_transaction", fake_transaction)
+
+    async def no_erasure_fence(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(runtime, "subject_is_erased", no_erasure_fence)
     executor = JobExecutor(
         JobRegistration(
             lane=Lane.DISPATCH_EMAIL,
@@ -140,6 +147,60 @@ async def test_terminal_action_runs_after_failed_attempt_rollback(monkeypatch):
         "exhausted",
         "transaction_commit",
     ]
+
+
+@pytest.mark.verifies("FR-IDA-014")
+async def test_worker_rolls_back_when_service_ends_before_commit(monkeypatch):
+    events: list[str] = []
+    allowed = iter((True, False))
+
+    @asynccontextmanager
+    async def fake_transaction(_scope: object):
+        try:
+            yield cast(AsyncSession, object())
+        except OrganizationWorkSuspended:
+            events.append("rollback")
+            raise
+        else:
+            events.append("commit")
+
+    async def fake_access(_session: AsyncSession) -> bool:
+        events.append("access_check")
+        return next(allowed)
+
+    monkeypatch.setattr(queue_context, "scoped_transaction", fake_transaction)
+    monkeypatch.setattr(queue_context, "org_service_access_allowed", fake_access)
+    body = envelope({"email_send_id": str(SEND)}, org_id=ORG)
+    with pytest.raises(OrganizationWorkSuspended):
+        async with job_transaction(Lane.DISPATCH_EMAIL, body, job_id="test"):
+            events.append("handler")
+    assert events == ["access_check", "handler", "access_check", "rollback"]
+
+
+@pytest.mark.verifies("FR-IDA-014")
+async def test_suspended_worker_does_not_run_handler_or_exhaustion(monkeypatch):
+    calls: list[str] = []
+
+    @asynccontextmanager
+    async def suspended_transaction(*_args: object, **_kwargs: object):
+        raise OrganizationWorkSuspended
+        yield cast(AsyncSession, object()), read({})  # pragma: no cover
+
+    async def handler(_session: AsyncSession, _job: object) -> None:
+        calls.append("handler")
+
+    async def exhausted(_session: AsyncSession, _job: object) -> None:
+        calls.append("exhausted")
+
+    monkeypatch.setattr(runtime, "job_transaction", suspended_transaction)
+    executor = JobExecutor(
+        JobRegistration(
+            lane=Lane.DISPATCH_EMAIL, handler=handler, on_exhausted=exhausted
+        )
+    )
+    await executor(_context(attempts=spec_for(Lane.DISPATCH_EMAIL).max_attempts),
+                   envelope({"email_send_id": str(SEND)}, org_id=ORG))
+    assert calls == []
 
 
 @pytest.mark.verifies("ADR-0023")

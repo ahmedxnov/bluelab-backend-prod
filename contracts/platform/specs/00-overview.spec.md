@@ -51,6 +51,12 @@ this file is the set's manifest and status line.
 
 BlueLab is a voice-roleplay platform for sales teams, sold as multi-tenant SaaS. One AI capability — a simulated buyer on a live voice call, graded against a per-drill rubric — powers two products:
 
+Egypt is the first launch market. BlueLab targets expansion across the Middle East, including Qatar,
+the United Arab Emirates, Kuwait, Bahrain, and Saudi Arabia. The Egypt launch configuration and its
+legal, language, latency, and hosting decisions apply to that first market. Customer use in each
+additional market follows a market-specific readiness review and release decision. The v1 release
+market is Egypt.
+
 - **BlueLab Training** — reps practice short voice drills against AI buyers with hidden motives and receive coaching reviews; managers author and assign drills, track the team by call type, and maintain the product facts that ground every grade.
 - **BlueLab Hiring** — managers build position-specific assessments from the same drills; candidates take them in the browser through a no-login invite link; the AI grades each call and the manager decides, forwarding approved candidates to HR with full reports.
 
@@ -63,7 +69,7 @@ The platform is **vertical-configurable**: buyer personas, product facts, and dr
 | **Manager** | Customer-org sales manager. Authors and assigns drills, coaches the team, runs hiring end-to-end. | Provisioned account (email + password) |
 | **Rep** | Customer-org salesperson. Practices drills, reviews their own results, authors private drills. | Provisioned account (email + password) |
 | **Candidate** | External job applicant. Takes one assessment in one sitting. | Tokenized invite link — no account |
-| **BlueLab Internal Operations** | BlueLab's own staff. Provisions and deactivates customer accounts, resolves escalated system faults. | Internal access — not a customer role |
+| **BlueLab Internal Operations** | BlueLab's own staff. Confirms customer service dates and retention policy, provisions and deactivates accounts, manages renewals, early termination, offboarding, and purge exceptions, and resolves escalated system faults. | Internal access — not a customer role |
 
 HR appears only as an **email recipient** of the hiring shortlist; HR is not a user of the system.
 
@@ -74,7 +80,7 @@ HR appears only as an **email recipient** of the hiring shortlist; HR is not a u
 The shape of v1, in five statements:
 
 1. **Both products ship together** — Training and Hiring, complete as specified.
-2. **Calls and grading are in Egyptian Arabic** — the live roleplay and the AI evaluation operate in Egyptian Arabic; the application interface and all written coaching commentary are in English, with spoken quotes rendered verbatim in Arabic.
+2. **Egypt-launch calls and grading are in Egyptian Arabic** — the live roleplay and the AI evaluation operate in Egyptian Arabic for v1; the application interface and all written coaching commentary are in English, with spoken quotes rendered verbatim in Arabic. Additional market languages and dialects require their own product and evaluation validation before release.
 3. **Desktop-browser web application** — all three user-facing experiences target current desktop browsers.
 4. **Multi-tenant from day one** — multiple customer orgs, with tenant isolation as a compliance requirement ([CMP-004](01-nfr-and-compliance.spec.md)).
 5. **Operator-mediated access** — BlueLab Internal Operations provisions every account; candidates enter by tokenized link only.
@@ -103,7 +109,7 @@ S-4 and S-5 are measured operationally by BlueLab during pilots; the product its
 
 1. **No technology is pre-decided.** Every stack choice is made downstream with evidence. One recorded leaning for that evaluation: real-time voice I/O is expected to be a procured capability (with Egyptian Arabic quality as a selection criterion), not built in-house.
 2. **The design wireframes are behavioral reference only.** Their code is not a seed; the walkthrough documents describe intended behavior, and this specification supersedes them wherever they differ.
-3. **Compliance posture** — Egypt-first, privacy-by-design; binding requirements in [01](01-nfr-and-compliance.spec.md). GDPR-readiness guides design but is not a v1 certification.
+3. **Compliance posture** — Egypt's launch obligations are binding under [01](01-nfr-and-compliance.spec.md). Each additional market requires its applicable legal, privacy, recording, transfer, and retention obligations to be established before customer use. GDPR-readiness guides design but is not a v1 certification.
 
 ## 6. Transactional email inventory
 
