@@ -19,7 +19,7 @@
 create or replace function fn_decision_freeze() returns trigger
 language plpgsql as $$
 begin
-    if app_in_erasure_context() then
+    if app_in_erasure_context() or app_in_purge_context() then
         return new;
     end if;
     if new.decision is not distinct from old.decision then

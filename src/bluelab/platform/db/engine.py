@@ -25,9 +25,24 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from bluelab.platform.config import Settings, get_settings
+
+
+def require_erasure_database_role(settings: Settings) -> None:
+    """Refuse to start erasure work with the API's database credential."""
+    username = make_url(settings.database_url.get_secret_value()).username
+    if username != "bluelab_erasure":
+        raise RuntimeError("erasure work requires the bluelab_erasure database role")
+
+
+def require_maintenance_database_role(settings: Settings) -> None:
+    """Keep global maintenance discovery and sweeps off the API credential."""
+    username = make_url(settings.database_url.get_secret_value()).username
+    if username != "bluelab_maintenance":
+        raise RuntimeError("maintenance work requires the bluelab_maintenance database role")
 
 
 def build_engine(settings: Settings) -> AsyncEngine:

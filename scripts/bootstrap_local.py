@@ -18,7 +18,10 @@ from typing import Final
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[1]
 VENV_ROOT: Final = REPO_ROOT / ".venv"
-LOCAL_DATABASE_URL: Final = "postgresql+psycopg://bluelab:bluelab@127.0.0.1:5432/bluelab"
+LOCAL_DATABASE_PORT: Final = os.environ.get("BLUELAB_POSTGRES_PORT", "5432")
+LOCAL_DATABASE_URL: Final = (
+    f"postgresql+psycopg://bluelab:bluelab@127.0.0.1:{LOCAL_DATABASE_PORT}/bluelab"
+)
 
 
 def venv_python() -> Path:

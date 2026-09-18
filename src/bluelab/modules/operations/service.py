@@ -29,14 +29,11 @@ from bluelab.modules.operations.schemas import (
     ErasureRequestView,
     ExportRequestPage,
     ExportRequestView,
-    SubjectKind,
 )
 from bluelab.platform.config import Settings
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError, not_found
 from bluelab.platform.ids import new_id
-from bluelab.platform.queue.catalog import Lane
-from bluelab.platform.queue.enqueue import enqueue
 from bluelab.platform.security import passwords
 from bluelab.platform.security.throttle import Limit, Throttle
 from bluelab.platform.security.tokens import hash_token
@@ -381,58 +378,6 @@ class _RequestCursor:
             return cls(requested_at=requested_at, request_id=UUID(data["id"]))
         except (ValueError, TypeError, KeyError, binascii.Error, json.JSONDecodeError) as exc:
             raise ProblemError(catalog.VALIDATION_ERROR, detail="cursor is not one this server issued") from exc
-
-
-async def create_subject_request(
-    session: AsyncSession,
-    *,
-    request_kind: Literal["erasure", "export"],
-    org_id: UUID,
-    subject_kind: SubjectKind,
-    subject_id: UUID,
-    executed_by: UUID,
-) -> ErasureRequestView | ExportRequestView:
-    """Validate one subject and transactionally enqueue its rights request."""
-    request_id = new_id()
-    await session.execute(
-        text("select pg_advisory_xact_lock(hashtextextended(:subject, 0))"),
-        {"subject": str(subject_id)},
-    )
-    valid = (
-        await session.execute(
-            text("select app_subject_request_valid(:org,:kind,:subject,:erasure)"),
-            {
-                "org": org_id,
-                "kind": subject_kind,
-                "subject": subject_id,
-                "erasure": request_kind == "erasure",
-            },
-        )
-    ).scalar_one()
-    if not valid:
-        raise ProblemError(catalog.SUBJECT_UNKNOWN)
-    table = "erasure_request" if request_kind == "erasure" else "export_request"
-    columns = ",executed_by" if request_kind == "erasure" else ""
-    values = ",:actor" if request_kind == "erasure" else ""
-    await session.execute(
-        text(
-            f"insert into {table}(id,org_id,subject_kind,subject_id,request_policy_reference{columns}) "
-            f"values(:id,:org,:kind,:subject,:policy{values})"
-        ),
-        {
-            "id": request_id,
-            "org": org_id,
-            "kind": subject_kind,
-            "subject": subject_id,
-            "policy": "subject-rights:v1",
-            "actor": executed_by,
-        },
-    )
-    lane = Lane.EXECUTE_ERASURE if request_kind == "erasure" else Lane.EXECUTE_EXPORT
-    await enqueue(session, lane, {"request_id": str(request_id)}, org_id=org_id)
-    return await get_subject_request(
-        session, request_kind=request_kind, request_id=request_id, bundle_url=None
-    )
 
 
 async def get_subject_request(

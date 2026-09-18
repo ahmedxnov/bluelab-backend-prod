@@ -13,6 +13,7 @@ import ssl
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import parseaddr
+from inspect import signature
 from typing import Any, Protocol, cast
 from urllib.parse import unquote, urlsplit
 
@@ -53,8 +54,21 @@ def validate_address(value: str) -> str:
     """Reject header injection and anything other than one bare mailbox."""
     if "\r" in value or "\n" in value:
         raise ValueError("email address contains a header boundary")
-    display, address = parseaddr(value, strict=True)
-    if display or address != value or "@" not in address:
+    # Python 3.13 added ``strict``. The service baseline remains Python 3.12,
+    # so preserve the same bare-mailbox boundary with explicit checks there.
+    if "strict" in signature(parseaddr).parameters:
+        display, address = parseaddr(value, strict=True)
+    else:
+        display, address = parseaddr(value)
+    if (
+        display
+        or address != value
+        or address.count("@") != 1
+        or any(character.isspace() for character in address)
+    ):
+        raise ValueError("email address must be one bare mailbox")
+    local_part, domain = address.rsplit("@", 1)
+    if not local_part or not domain:
         raise ValueError("email address must be one bare mailbox")
     return address
 

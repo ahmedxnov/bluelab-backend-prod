@@ -443,12 +443,14 @@ async def world(training_engine, clean_training_legal_catalog) -> AsyncIterator[
     async with maker() as s, s.begin():
         # `scorecard` and `attempt` are insert-only: `trg_scorecard_freeze` raises
         # on any delete, because a graded record is frozen evidence (FR-SCR-003,
-        # AC-SCR-002). The ONE sanctioned way past it is the erasure context, so
-        # the teardown enters it rather than reaching for a trigger disable — the
-        # same door the subject-rights flow will use.
-        #
-        # Transaction-local, so it cannot leak into another test's session.
-        await s.execute(text("select set_config('app.erasure_context', 'on', true)"))
+        # AC-SCR-002). This fixture owns the database as the migration role.
+        # Application sessions cannot open the private transaction capability.
+        await s.execute(text(
+            "insert into bluelab_internal.erasure_authorization"
+            "(backend_pid,xact_id,request_id) "
+            "values(pg_backend_pid(),txid_current(),"
+            "'00000000-0000-0000-0000-000000000000')"
+        ))
 
         # Explicit dependency order. The foreign keys are NOT `on delete cascade`
         # — deleting the org first raises `fk_account_org_id` — so the teardown
@@ -915,9 +917,14 @@ async def team_world(training_engine, clean_training_legal_catalog) -> AsyncIter
 
     async with maker() as s, s.begin():
         # `trg_scorecard_freeze` raises on any delete of graded evidence
-        # (FR-SCR-003). The erasure context is the one sanctioned door past it,
-        # and it is transaction-local so it cannot leak into another test.
-        await s.execute(text("select set_config('app.erasure_context', 'on', true)"))
+        # (FR-SCR-003). Privileged fixture cleanup uses a private capability
+        # that ordinary application sessions cannot create.
+        await s.execute(text(
+            "insert into bluelab_internal.erasure_authorization"
+            "(backend_pid,xact_id,request_id) "
+            "values(pg_backend_pid(),txid_current(),"
+            "'00000000-0000-0000-0000-000000000000')"
+        ))
         for statement in (
             "delete from scorecard where org_id = :org",
             "delete from attempt where org_id = :org",

@@ -1,21 +1,31 @@
--- The erasure context — the one sanctioned way through a freeze guard.
+-- Transaction-bound freeze-guard capabilities for erasure and organization purge.
 --
--- ADR-0033: erasure is the single writer permitted to cross the freeze guards,
--- through a dedicated procedure the guards recognise. This is that recognition.
+-- ADR-0033 authorizes the subject-erasure procedure; data/03 §6 authorizes
+-- separately fenced organization-purge batches.
 --
--- The procedure sets `app.erasure_context` for the duration of its transaction
--- (SET LOCAL, so it cannot leak to the next one on a pooled connection), and the
--- guards call this to decide whether to yield.
---
--- It is deliberately NOT settable from a request path: nothing in
--- platform.db.scope writes this GUC, and the erasure procedure is reachable only
--- from the ops surface (ADR-0031's enumerated escape hatches).
+-- The guard checks a private capability keyed to the current backend and transaction.
+-- Only the SECURITY DEFINER erasure procedure opens and closes that capability.
+-- An application role can set a custom GUC, so no GUC grants this exemption.
 -- Re-applied idempotently at every release, and diffed by
 -- tools/check_rls_drift.py. NOT in the Alembic lineage (data/04 §3).
 
 create or replace function app_in_erasure_context() returns boolean
-language sql stable as
-$$ select coalesce(nullif(current_setting('app.erasure_context', true), ''), 'off') = 'on' $$;
+language sql volatile security definer
+set search_path = '' as
+$$ select exists (
+    select 1 from bluelab_internal.erasure_authorization
+     where backend_pid = pg_catalog.pg_backend_pid()
+       and xact_id = pg_catalog.txid_current()
+) $$;
+
+create or replace function app_in_purge_context() returns boolean
+language sql volatile security definer
+set search_path = '' as
+$$ select exists (
+    select 1 from bluelab_internal.purge_authorization
+     where backend_pid = pg_catalog.pg_backend_pid()
+       and xact_id = pg_catalog.txid_current()
+) $$;
 
 -- Did this UPDATE change anything beyond the denormalised scope columns?
 --

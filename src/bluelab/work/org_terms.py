@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from bluelab.adapters.lifecycle_history import (
     HistoryUnverified,
     LifecycleHistory,
 )
+from bluelab.lifecycle import restrictions, subject_requests, subject_states
 from bluelab.lifecycle import service as lifecycle
 from bluelab.modules.operations.models import OrgLifecycleOperation
 from bluelab.platform.db.privileged import system_scope
@@ -22,10 +24,12 @@ _log = get_logger(__name__)
 _DISCOVER = text("select org_id from app_due_org_service_terms(:at, :limit)")
 _PENDING = text("select org_id from app_pending_org_term_operations(:limit)")
 _DISCOVERY_ORG_ID = UUID(int=0)
+CallQuiescence = Callable[[UUID, datetime], Awaitable[None]]
 
 
 async def transition_one(
-    org_id: UUID, history: LifecycleHistory, *, at: datetime | None = None
+    org_id: UUID, history: LifecycleHistory, *, quiesce: CallQuiescence,
+    at: datetime | None = None,
 ) -> bool:
     """An accepted independent event survives a failed DB projection and replays."""
     head = await history.verified_head(org_id)
@@ -37,6 +41,8 @@ async def transition_one(
         return False
     if operation.action != "expire_term":
         raise HistoryUnverified("another lifecycle command is pending")
+    await quiesce(org_id, datetime.fromisoformat(
+        operation.command_payload["hold_started_at"]))
     try:
         event = await history.append(
             org_id=org_id, operation_id=operation.id,
@@ -57,7 +63,9 @@ async def transition_one(
     return True
 
 
-async def recover_one(org_id: UUID, history: LifecycleHistory) -> bool:
+async def recover_one(
+    org_id: UUID, history: LifecycleHistory, *, quiesce: CallQuiescence,
+) -> bool:
     """Complete an operator or expiry decision staged before an uncertain write."""
     async with scoped_transaction(system_scope(org_id=org_id)) as db:
         operation = (await db.execute(
@@ -68,15 +76,34 @@ async def recover_one(org_id: UUID, history: LifecycleHistory) -> bool:
         )).scalar_one_or_none()
     if operation is None:
         return False
-    if operation.action not in {"confirm_term", "renew_term", "expire_term"}:
+    if operation.action not in {
+        "confirm_term", "renew_term", "expire_term", "create_restriction",
+        "policy_revision",
+        "extend", "start", "cancel",
+        "set_subject_request_state", "release_restriction",
+    }:
         raise HistoryUnverified("unsupported pending lifecycle action")
     accepted = await history.accepted(org_id, operation.id)
     if accepted is None:
+        if operation.action in {"expire_term", "start"}:
+            since = (operation.created_at if operation.action == "start"
+                     else datetime.fromisoformat(
+                         operation.command_payload["hold_started_at"]))
+            await quiesce(org_id, since)
+            if operation.action == "start":
+                async with scoped_transaction(system_scope(org_id=org_id)) as db:
+                    operation = await lifecycle.finalize_start_offboarding(
+                        db, operation_id=operation.id,
+                    )
+                if operation.status == "rejected":
+                    return False
         try:
             accepted = await history.append(
                 org_id=org_id, operation_id=operation.id,
                 expected_sequence=operation.expected_sequence,
-                action=operation.action, accepted_at=operation.created_at.isoformat(),
+                action=operation.action, accepted_at=(
+                    operation.command_payload["cutoff_at"]
+                    if operation.action == "start" else operation.created_at.isoformat()),
                 actor_id=operation.actor_ops_account_id,
                 reason=operation.reason, data=operation.command_payload,
             )
@@ -84,11 +111,58 @@ async def recover_one(org_id: UUID, history: LifecycleHistory) -> bool:
             accepted = await history.accepted(org_id, operation.id)
             if accepted is None:
                 async with scoped_transaction(system_scope(org_id=org_id)) as db:
-                    await lifecycle.reject_term(db, operation.id)
+                    if operation.action == "create_restriction":
+                        await lifecycle.reject_term(db, operation.id)
+                    elif operation.action in {"set_subject_request_state", "release_restriction"}:
+                        await subject_states.reject(db, operation.id)
+                    else:
+                        await lifecycle.reject_term(db, operation.id)
                 return False
     async with scoped_transaction(system_scope(org_id=org_id)) as db:
         if operation.action == "expire_term":
             await lifecycle.apply_expiry(db, operation_id=operation.id, event=accepted)
+        elif operation.action == "create_restriction":
+            if "request_kind" in operation.command_payload:
+                await subject_requests.apply(
+                    db, operation_id=operation.id, event=accepted,
+                    replay_by_system=True,
+                )
+            else:
+                await restrictions.apply(
+                    db, operation_id=operation.id, event=accepted,
+                    replay_by_system=True,
+                )
+        elif operation.action in {"set_subject_request_state", "release_restriction"}:
+            if "request_kind" in operation.command_payload:
+                await subject_states.apply(
+                    db, operation_id=operation.id, event=accepted,
+                    replay_by_system=True,
+                )
+            else:
+                await restrictions.apply(
+                    db, operation_id=operation.id, event=accepted,
+                    replay_by_system=True,
+                )
+        elif operation.action == "policy_revision":
+            await lifecycle.apply_policy_revision(
+                db, operation_id=operation.id, event=accepted,
+                replay_by_system=True,
+            )
+        elif operation.action == "extend":
+            await lifecycle.apply_deadline_extension(
+                db, operation_id=operation.id, event=accepted,
+                replay_by_system=True,
+            )
+        elif operation.action == "start":
+            await lifecycle.apply_start_offboarding(
+                db, operation_id=operation.id, event=accepted,
+                replay_by_system=True,
+            )
+        elif operation.action == "cancel":
+            await lifecycle.apply_cancel_offboarding(
+                db, operation_id=operation.id, event=accepted,
+                replay_by_system=True,
+            )
         else:
             await lifecycle.apply_term(
                 db, operation_id=operation.id, event=accepted,
@@ -98,7 +172,8 @@ async def recover_one(org_id: UUID, history: LifecycleHistory) -> bool:
 
 
 async def transition_due(
-    history: LifecycleHistory, *, at: datetime | None = None
+    history: LifecycleHistory, *, quiesce: CallQuiescence,
+    at: datetime | None = None,
 ) -> dict[str, int]:
     """Discover due terms hourly; one failure never prevents another transition."""
     cutoff = at or datetime.now(UTC)
@@ -111,7 +186,7 @@ async def transition_due(
     recovered = 0
     for org_id in pending_ids:
         try:
-            if await recover_one(org_id, history):
+            if await recover_one(org_id, history, quiesce=quiesce):
                 recovered += 1
         except Exception:  # noqa: BLE001 -- one pending command cannot starve others
             failed += 1
@@ -122,7 +197,7 @@ async def transition_due(
         )]
     for org_id in ids:
         try:
-            if await transition_one(org_id, history, at=cutoff):
+            if await transition_one(org_id, history, quiesce=quiesce, at=cutoff):
                 transitioned += 1
         except Exception:  # noqa: BLE001 -- one tenant cannot starve another
             failed += 1

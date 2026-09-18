@@ -8,14 +8,23 @@ from datetime import date, datetime
 from typing import Any, Literal, cast
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bluelab.adapters.lifecycle_history import HistoryEvent, HistoryHead
 from bluelab.modules.identity import service as identity_service
-from bluelab.modules.operations.models import OpsAudit, OrgLifecycleOperation
+from bluelab.modules.identity.models import OrgRetentionPolicy, OrgServiceTerm
+from bluelab.modules.operations.models import (
+    OpsAudit,
+    OrgDeletionRestriction,
+    OrgLifecycleOperation,
+)
 from bluelab.modules.operations.schemas import (
+    OrgDeadlineCommand,
+    OrgLifecycleCommand,
     OrgLifecycleView,
+    OrgRestrictionView,
+    OrgRetentionPolicyCommand,
     OrgRetentionPolicyView,
     OrgServiceTermCommand,
     RetentionUnit,
@@ -28,6 +37,30 @@ from bluelab.platform.ids import new_id
 
 DEFAULT_POLICY_REFERENCE = "org-default-90d:v1"
 EXPIRE_REASON = "Confirmed service term expired"
+
+
+async def _term_policy(
+    session: AsyncSession, term: OrgServiceTerm,
+) -> tuple[int, RetentionUnit, str | None]:
+    """Read the immutable policy applied to this term, not today's revision."""
+    operation = (await session.execute(
+        select(OrgLifecycleOperation).where(
+            OrgLifecycleOperation.org_id == term.org_id,
+            OrgLifecycleOperation.service_term_id == term.id,
+            OrgLifecycleOperation.status == "applied",
+            OrgLifecycleOperation.action.in_(("confirm_term", "renew_term")),
+        )
+    )).scalar_one_or_none()
+    if operation is None:
+        raise ProblemError(catalog.RETENTION_POLICY_UNVERIFIED)
+    policy = operation.command_payload.get("retention_policy")
+    if not isinstance(policy, dict) or policy.get("policy_reference") != term.retention_policy_reference:
+        raise ProblemError(catalog.RETENTION_POLICY_UNVERIFIED)
+    return (
+        int(policy["period_value"]),
+        cast(RetentionUnit, policy["period_unit"]),
+        cast(str | None, policy.get("calendar_timezone")),
+    )
 
 
 def expiry_operation_id(org_id: UUID, service_term_id: UUID) -> UUID:
@@ -43,7 +76,7 @@ async def prepare_expiry(
     projection = await identity_service.lifecycle_projection(session, org_id, lock=True)
     if projection is None:
         return None
-    org, term, policy = projection
+    org, term, _ = projection
     if org.lifecycle_status != "active" or term is None or term.ends_at > (at or now()):
         return None
     operation_id = expiry_operation_id(org_id, term.id)
@@ -62,16 +95,7 @@ async def prepare_expiry(
     )).scalar_one_or_none()
     if pending is not None:
         raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
-    if term.retention_policy_reference == DEFAULT_POLICY_REFERENCE:
-        period_value: int = 90
-        period_unit: RetentionUnit = "elapsed_days"
-        calendar_timezone = None
-    elif policy is not None and policy.policy_reference == term.retention_policy_reference:
-        period_value = policy.period_value
-        period_unit = cast(RetentionUnit, policy.period_unit)
-        calendar_timezone = policy.calendar_timezone
-    else:
-        raise ProblemError(catalog.RETENTION_POLICY_UNVERIFIED)
+    period_value, period_unit, calendar_timezone = await _term_policy(session, term)
     deadline = retention_deadline(
         term.ends_at, period_value, period_unit, calendar_timezone
     )
@@ -142,7 +166,9 @@ async def apply_expiry(
     operation.resolved_at = now()
 
 
-def _command_digest(org_id: UUID, command: OrgServiceTermCommand) -> str:
+def _command_digest(
+    org_id: UUID, command: OrgServiceTermCommand | OrgLifecycleCommand,
+) -> str:
     serialized = json.dumps(
         {"org_id": str(org_id), "command": command.model_dump(mode="json")},
         sort_keys=True, separators=(",", ":"),
@@ -362,13 +388,525 @@ async def reject_term(session: AsyncSession, operation_id: UUID) -> None:
         operation.resolved_at = now()
 
 
+async def prepare_start_offboarding(
+    session: AsyncSession, *, org_id: UUID, operation_id: UUID,
+    actor_id: UUID, command: OrgLifecycleCommand, head: HistoryHead,
+) -> OrgLifecycleOperation:
+    """Fence ordinary work before established calls are drained."""
+    digest = _command_digest(org_id, command)
+    existing = await session.scalar(select(OrgLifecycleOperation).where(
+        OrgLifecycleOperation.id == operation_id,
+    ))
+    if existing is not None:
+        if (existing.org_id != org_id or existing.action != "start"
+                or existing.actor_ops_account_id != actor_id
+                or existing.command_digest != digest):
+            raise ProblemError(catalog.OPERATION_ID_REUSE)
+        if existing.status == "rejected":
+            raise ProblemError(catalog.LIFECYCLE_SEQUENCE_STALE)
+        return existing
+    projection = await identity_service.lifecycle_projection(session, org_id, lock=True)
+    if projection is None:
+        raise not_found()
+    org, term, _ = projection
+    if org.lifecycle_sequence != head.sequence:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if command.expected_sequence != head.sequence:
+        raise ProblemError(catalog.LIFECYCLE_SEQUENCE_STALE)
+    if org.lifecycle_status == "purging":
+        raise ProblemError(catalog.PURGE_ALREADY_CLAIMED)
+    if org.lifecycle_status != "active" or term is None or org.service_ends_at is None:
+        raise ProblemError(catalog.OFFBOARDING_EPISODE_STALE)
+    if now() >= org.service_ends_at:
+        raise ProblemError(catalog.SERVICE_TERM_INVALID)
+    if await session.scalar(select(OrgLifecycleOperation.id).where(
+        OrgLifecycleOperation.org_id == org_id,
+        OrgLifecycleOperation.status == "pending",
+    )) is not None:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    period_value, period_unit, calendar_timezone = await _term_policy(session, term)
+    episode_id = new_id()
+    data: dict[str, Any] = {
+        "offboarding_id": str(episode_id), "service_term_id": str(term.id),
+        "original_service_end": term.ends_at.isoformat(),
+        "retention_policy_reference": term.retention_policy_reference,
+        "period_value": period_value, "period_unit": period_unit,
+        "calendar_timezone": calendar_timezone,
+        "cutoff_at": None, "purge_eligible_at": None,
+        "audit_id": str(new_id()),
+    }
+    operation = OrgLifecycleOperation(
+        id=operation_id, org_id=org_id, service_term_id=term.id,
+        offboarding_id=episode_id, action="start",
+        expected_sequence=head.sequence, actor_ops_account_id=actor_id,
+        reason=require_reason(command.reason),
+        retention_policy_reference=term.retention_policy_reference,
+        command_payload=data, command_digest=digest,
+    )
+    session.add(operation)
+    await session.flush()
+    return operation
+
+
+async def finalize_start_offboarding(
+    session: AsyncSession, *, operation_id: UUID,
+) -> OrgLifecycleOperation:
+    """Fix the accepted cutoff after call quiescence, once per operation."""
+    operation = await session.scalar(select(OrgLifecycleOperation).where(
+        OrgLifecycleOperation.id == operation_id,
+    ).with_for_update())
+    if operation is None or operation.action != "start" or operation.status != "pending":
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if operation.command_payload.get("cutoff_at") is not None:
+        return operation
+    projection = await identity_service.lifecycle_projection(
+        session, operation.org_id, lock=True)
+    if projection is None or projection[0].lifecycle_sequence != operation.expected_sequence:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    org, term, _ = projection
+    if (term is None or term.id != operation.service_term_id
+            or org.lifecycle_status != "active"):
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    cutoff = now()
+    if cutoff >= term.ends_at:
+        # The contractual end won while rooms were draining. Retire this
+        # unaccepted command so the expiry transition can create its own
+        # episode from the persisted service end, without leaving a fence.
+        operation.status = "rejected"
+        operation.resolved_at = cutoff
+        await session.flush()
+        return operation
+    data = operation.command_payload
+    deadline = retention_deadline(
+        cutoff, int(data["period_value"]),
+        cast(RetentionUnit, data["period_unit"]),
+        cast(str | None, data["calendar_timezone"]),
+    )
+    operation.command_payload = {
+        **data, "cutoff_at": cutoff.isoformat(),
+        "purge_eligible_at": deadline.isoformat(),
+    }
+    operation.requested_deadline = deadline
+    await session.flush()
+    return operation
+
+
+async def apply_start_offboarding(
+    session: AsyncSession, *, operation_id: UUID, event: HistoryEvent,
+    replay_by_system: bool = False,
+) -> None:
+    operation = await session.scalar(select(OrgLifecycleOperation).where(
+        OrgLifecycleOperation.id == operation_id,
+    ).with_for_update())
+    if operation is None or operation.action != "start":
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if operation.status == "applied":
+        return
+    if (operation.status != "pending" or event.operation_id != operation_id
+            or event.org_id != operation.org_id or event.action != "start"
+            or event.actor_id != operation.actor_ops_account_id
+            or event.actor_id is None or event.reason != operation.reason
+            or event.data != operation.command_payload
+            or event.sequence != operation.expected_sequence + 1
+            or event.accepted_at != operation.command_payload.get("cutoff_at")):
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    projection = await identity_service.lifecycle_projection(
+        session, operation.org_id, lock=True)
+    if projection is None:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    org, term, _ = projection
+    if (org.lifecycle_sequence != operation.expected_sequence
+            or org.lifecycle_status != "active" or term is None
+            or term.id != operation.service_term_id):
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    data = event.data
+    cutoff = datetime.fromisoformat(data["cutoff_at"])
+    org.lifecycle_status = "offboarding"
+    org.lifecycle_sequence = event.sequence
+    org.service_ends_at = cutoff
+    org.offboarding_id = UUID(data["offboarding_id"])
+    org.offboarding_started_at = cutoff
+    org.offboarding_started_by = event.actor_id
+    org.purge_eligible_at = datetime.fromisoformat(data["purge_eligible_at"])
+    org.retention_policy_reference = data["retention_policy_reference"]
+    ref = {"org_id": str(org.id), "offboarding_id": data["offboarding_id"],
+           "cutoff_at": data["cutoff_at"]}
+    if replay_by_system:
+        session.add(OpsAudit(
+            id=UUID(data["audit_id"]), ops_account_id=event.actor_id,
+            verb="start_org_offboarding", target_org_id=org.id,
+            target_ref=ref, reason=event.reason, occurred_at=cutoff,
+        ))
+    else:
+        await session.execute(text(
+            "select app_append_ops_audit(:id,'start_org_offboarding',"
+            ":org,cast(:ref as jsonb),:reason)"
+        ), {"id": UUID(data["audit_id"]), "org": org.id,
+            "ref": json.dumps(ref), "reason": event.reason})
+    operation.status = "applied"
+    operation.resulting_sequence = event.sequence
+    operation.resolved_at = now()
+
+
+async def prepare_cancel_offboarding(
+    session: AsyncSession, *, org_id: UUID, offboarding_id: UUID,
+    operation_id: UUID, actor_id: UUID, command: OrgLifecycleCommand,
+    head: HistoryHead,
+) -> OrgLifecycleOperation:
+    digest = _command_digest(org_id, command)
+    existing = await session.scalar(select(OrgLifecycleOperation).where(
+        OrgLifecycleOperation.id == operation_id,
+    ))
+    if existing is not None:
+        if (existing.org_id != org_id or existing.action != "cancel"
+                or existing.offboarding_id != offboarding_id
+                or existing.actor_ops_account_id != actor_id
+                or existing.command_digest != digest):
+            raise ProblemError(catalog.OPERATION_ID_REUSE)
+        if existing.status == "rejected":
+            raise ProblemError(catalog.LIFECYCLE_SEQUENCE_STALE)
+        return existing
+    projection = await identity_service.lifecycle_projection(session, org_id, lock=True)
+    if projection is None:
+        raise not_found()
+    org, term, _ = projection
+    if org.lifecycle_sequence != head.sequence:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if command.expected_sequence != head.sequence:
+        raise ProblemError(catalog.LIFECYCLE_SEQUENCE_STALE)
+    if (org.lifecycle_status != "offboarding" or org.offboarding_id != offboarding_id
+            or org.offboarding_started_by is None or term is None
+            or now() >= term.ends_at):
+        raise ProblemError(catalog.OFFBOARDING_EPISODE_STALE)
+    if await session.scalar(select(OrgLifecycleOperation.id).where(
+        OrgLifecycleOperation.org_id == org_id,
+        OrgLifecycleOperation.status == "pending",
+    )) is not None:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    data = {
+        "offboarding_id": str(offboarding_id), "service_term_id": str(term.id),
+        "restored_service_end": term.ends_at.isoformat(),
+        "audit_id": str(new_id()),
+    }
+    operation = OrgLifecycleOperation(
+        id=operation_id, org_id=org_id, service_term_id=term.id,
+        offboarding_id=offboarding_id, action="cancel",
+        expected_sequence=head.sequence, actor_ops_account_id=actor_id,
+        reason=require_reason(command.reason), command_payload=data,
+        command_digest=digest,
+    )
+    session.add(operation)
+    await session.flush()
+    return operation
+
+
+async def apply_cancel_offboarding(
+    session: AsyncSession, *, operation_id: UUID, event: HistoryEvent,
+    replay_by_system: bool = False,
+) -> None:
+    operation = await session.scalar(select(OrgLifecycleOperation).where(
+        OrgLifecycleOperation.id == operation_id,
+    ).with_for_update())
+    if operation is None or operation.action != "cancel":
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if operation.status == "applied":
+        return
+    if (operation.status != "pending" or event.operation_id != operation_id
+            or event.org_id != operation.org_id or event.action != "cancel"
+            or event.actor_id != operation.actor_ops_account_id
+            or event.actor_id is None or event.reason != operation.reason
+            or event.data != operation.command_payload
+            or event.sequence != operation.expected_sequence + 1):
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    projection = await identity_service.lifecycle_projection(
+        session, operation.org_id, lock=True)
+    if projection is None:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    org, term, _ = projection
+    if (org.lifecycle_sequence != operation.expected_sequence
+            or org.lifecycle_status != "offboarding"
+            or org.offboarding_id != operation.offboarding_id
+            or org.offboarding_started_by is None or term is None
+            or term.id != operation.service_term_id or now() >= term.ends_at):
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    org.lifecycle_status = "active"
+    org.lifecycle_sequence = event.sequence
+    org.service_ends_at = term.ends_at
+    org.offboarding_id = None
+    org.offboarding_started_at = None
+    org.offboarding_started_by = None
+    org.purge_eligible_at = None
+    org.retention_policy_reference = None
+    ref = {"org_id": str(org.id), "offboarding_id": str(operation.offboarding_id)}
+    if replay_by_system:
+        session.add(OpsAudit(
+            id=UUID(event.data["audit_id"]), ops_account_id=event.actor_id,
+            verb="cancel_org_offboarding", target_org_id=org.id,
+            target_ref=ref, reason=event.reason,
+            occurred_at=datetime.fromisoformat(event.accepted_at),
+        ))
+    else:
+        await session.execute(text(
+            "select app_append_ops_audit(:id,'cancel_org_offboarding',"
+            ":org,cast(:ref as jsonb),:reason)"
+        ), {"id": UUID(event.data["audit_id"]), "org": org.id,
+            "ref": json.dumps(ref), "reason": event.reason})
+    operation.status = "applied"
+    operation.resulting_sequence = event.sequence
+    operation.resolved_at = now()
+
+
+async def prepare_policy_revision(
+    session: AsyncSession, *, org_id: UUID, operation_id: UUID,
+    actor_id: UUID, command: OrgRetentionPolicyCommand, head: HistoryHead,
+) -> OrgLifecycleOperation:
+    """Stage a contract revision without rewriting a confirmed service term."""
+    data = command.model_dump(mode="json")
+    digest = hashlib.sha256(json.dumps(
+        {"org_id": str(org_id), "command": data},
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    existing = (await session.execute(select(OrgLifecycleOperation).where(
+        OrgLifecycleOperation.id == operation_id,
+    ))).scalar_one_or_none()
+    if existing is not None:
+        if (existing.org_id, existing.actor_ops_account_id, existing.command_digest) != (
+            org_id, actor_id, digest,
+        ) or existing.action != "policy_revision":
+            raise ProblemError(catalog.OPERATION_ID_REUSE)
+        if existing.status == "rejected":
+            raise ProblemError(catalog.LIFECYCLE_SEQUENCE_STALE)
+        return existing
+    projection = await identity_service.lifecycle_projection(session, org_id, lock=True)
+    if projection is None:
+        raise not_found()
+    org, _, current = projection
+    if org.lifecycle_sequence != head.sequence:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if command.expected_sequence != head.sequence:
+        raise ProblemError(catalog.LIFECYCLE_SEQUENCE_STALE)
+    if org.lifecycle_status == "purging":
+        raise ProblemError(catalog.PURGE_ALREADY_CLAIMED)
+    pending = (await session.execute(select(OrgLifecycleOperation.id).where(
+        OrgLifecycleOperation.org_id == org_id,
+        OrgLifecycleOperation.status == "pending",
+    ))).scalar_one_or_none()
+    if pending is not None:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if command.period_unit != "elapsed_days" and command.calendar_timezone != org.timezone:
+        raise ProblemError(catalog.RETENTION_POLICY_UNVERIFIED)
+    if command.policy_reference == DEFAULT_POLICY_REFERENCE:
+        raise ProblemError(catalog.RETENTION_POLICY_UNVERIFIED)
+    if current is not None and current.policy_reference == command.policy_reference and (
+        current.period_value != command.period_value
+        or current.period_unit != command.period_unit
+        or current.calendar_timezone != command.calendar_timezone
+        or current.contract_reference != command.contract_reference
+    ):
+        raise ProblemError(catalog.RETENTION_POLICY_UNVERIFIED)
+    reason = require_reason(command.reason)
+    payload = {
+        "policy_reference": command.policy_reference,
+        "contract_reference": command.contract_reference,
+        "period_value": command.period_value,
+        "period_unit": command.period_unit,
+        "calendar_timezone": command.calendar_timezone,
+    }
+    operation = OrgLifecycleOperation(
+        id=operation_id, org_id=org_id, action="policy_revision",
+        expected_sequence=head.sequence, actor_ops_account_id=actor_id,
+        reason=reason, retention_policy_reference=command.policy_reference,
+        command_payload=payload, command_digest=digest,
+    )
+    session.add(operation)
+    await session.flush()
+    return operation
+
+
+async def apply_policy_revision(
+    session: AsyncSession, *, operation_id: UUID, event: HistoryEvent,
+    replay_by_system: bool = False,
+) -> None:
+    """Project one independently accepted revision with its audit record."""
+    operation = (await session.execute(select(OrgLifecycleOperation).where(
+        OrgLifecycleOperation.id == operation_id,
+    ).with_for_update())).scalar_one_or_none()
+    if operation is None or operation.action != "policy_revision":
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if operation.status == "applied":
+        return
+    if (
+        operation.status != "pending" or event.operation_id != operation_id
+        or event.org_id != operation.org_id or event.action != operation.action
+        or event.actor_id != operation.actor_ops_account_id
+        or event.sequence != operation.expected_sequence + 1
+        or event.reason != operation.reason or event.data != operation.command_payload
+        or event.actor_id is None
+    ):
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    projection = await identity_service.lifecycle_projection(session, operation.org_id, lock=True)
+    if projection is None or projection[0].lifecycle_sequence != operation.expected_sequence:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    org, _, current = projection
+    values = {
+        "policy_reference": event.data["policy_reference"],
+        "contract_reference": event.data["contract_reference"],
+        "period_value": event.data["period_value"],
+        "period_unit": event.data["period_unit"],
+        "calendar_timezone": event.data["calendar_timezone"],
+        "effective_sequence": event.sequence,
+        "approved_at": datetime.fromisoformat(event.accepted_at),
+        "approved_by": event.actor_id,
+        "reason": event.reason,
+    }
+    if current is None:
+        session.add(OrgRetentionPolicy(org_id=org.id, **values))
+    else:
+        for key, value in values.items():
+            setattr(current, key, value)
+    org.lifecycle_sequence = event.sequence
+    if replay_by_system:
+        session.add(OpsAudit(
+            id=new_id(), ops_account_id=event.actor_id,
+            verb="revise_org_retention_policy", target_org_id=org.id,
+            target_ref={"org_id": str(org.id), "policy_reference": event.data["policy_reference"]},
+            reason=event.reason,
+        ))
+    else:
+        await append_audit(
+            session, verb="revise_org_retention_policy", target_org_id=org.id,
+            target_ref={"org_id": str(org.id), "policy_reference": event.data["policy_reference"]},
+            reason=event.reason,
+        )
+    operation.status = "applied"
+    operation.resulting_sequence = event.sequence
+    operation.resolved_at = now()
+
+
+async def prepare_deadline_extension(
+    session: AsyncSession, *, org_id: UUID, offboarding_id: UUID,
+    operation_id: UUID, actor_id: UUID, command: OrgDeadlineCommand,
+    head: HistoryHead,
+) -> OrgLifecycleOperation:
+    """Stage a strictly later deadline for the named unclaimed episode."""
+    digest = hashlib.sha256(json.dumps({
+        "org_id": str(org_id), "offboarding_id": str(offboarding_id),
+        "command": command.model_dump(mode="json"),
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    existing = (await session.execute(select(OrgLifecycleOperation).where(
+        OrgLifecycleOperation.id == operation_id,
+    ))).scalar_one_or_none()
+    if existing is not None:
+        if (
+            existing.action != "extend" or existing.org_id != org_id
+            or existing.offboarding_id != offboarding_id
+            or existing.actor_ops_account_id != actor_id
+            or existing.command_digest != digest
+        ):
+            raise ProblemError(catalog.OPERATION_ID_REUSE)
+        if existing.status == "rejected":
+            raise ProblemError(catalog.LIFECYCLE_SEQUENCE_STALE)
+        return existing
+    projection = await identity_service.lifecycle_projection(session, org_id, lock=True)
+    if projection is None:
+        raise not_found()
+    org = projection[0]
+    if org.lifecycle_sequence != head.sequence:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if command.expected_sequence != head.sequence:
+        raise ProblemError(catalog.LIFECYCLE_SEQUENCE_STALE)
+    if org.lifecycle_status == "purging":
+        raise ProblemError(catalog.PURGE_ALREADY_CLAIMED)
+    if org.lifecycle_status != "offboarding" or org.offboarding_id != offboarding_id:
+        raise ProblemError(catalog.OFFBOARDING_EPISODE_STALE)
+    pending = (await session.execute(select(OrgLifecycleOperation.id).where(
+        OrgLifecycleOperation.org_id == org_id,
+        OrgLifecycleOperation.status == "pending",
+    ))).scalar_one_or_none()
+    if pending is not None:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if org.purge_eligible_at is None or command.purge_eligible_at <= org.purge_eligible_at:
+        raise ProblemError(catalog.SERVICE_TERM_INVALID)
+    reason = require_reason(command.reason)
+    data = {
+        "offboarding_id": str(offboarding_id),
+        "old_deadline": org.purge_eligible_at.isoformat(),
+        "new_deadline": command.purge_eligible_at.isoformat(),
+    }
+    operation = OrgLifecycleOperation(
+        id=operation_id, org_id=org_id, offboarding_id=offboarding_id,
+        action="extend", expected_sequence=head.sequence,
+        actor_ops_account_id=actor_id, reason=reason,
+        requested_deadline=command.purge_eligible_at,
+        command_payload=data, command_digest=digest,
+    )
+    session.add(operation)
+    await session.flush()
+    return operation
+
+
+async def apply_deadline_extension(
+    session: AsyncSession, *, operation_id: UUID, event: HistoryEvent,
+    replay_by_system: bool = False,
+) -> None:
+    """Project an accepted extension and audit it in one transaction."""
+    operation = (await session.execute(select(OrgLifecycleOperation).where(
+        OrgLifecycleOperation.id == operation_id,
+    ).with_for_update())).scalar_one_or_none()
+    if operation is None or operation.action != "extend":
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    if operation.status == "applied":
+        return
+    if (
+        operation.status != "pending" or event.operation_id != operation_id
+        or event.org_id != operation.org_id or event.action != "extend"
+        or event.actor_id != operation.actor_ops_account_id or event.actor_id is None
+        or event.reason != operation.reason or event.data != operation.command_payload
+        or event.sequence != operation.expected_sequence + 1
+    ):
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    projection = await identity_service.lifecycle_projection(session, operation.org_id, lock=True)
+    if projection is None:
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    org = projection[0]
+    if (
+        org.lifecycle_sequence != operation.expected_sequence
+        or org.lifecycle_status != "offboarding"
+        or org.offboarding_id != operation.offboarding_id
+        or org.purge_eligible_at is None
+        or org.purge_eligible_at.isoformat() != event.data["old_deadline"]
+    ):
+        raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
+    org.purge_eligible_at = datetime.fromisoformat(event.data["new_deadline"])
+    org.lifecycle_sequence = event.sequence
+    audit_ref = {
+        "org_id": str(org.id), "offboarding_id": str(operation.offboarding_id),
+        "old_deadline": event.data["old_deadline"],
+        "new_deadline": event.data["new_deadline"],
+    }
+    if replay_by_system:
+        session.add(OpsAudit(
+            id=new_id(), ops_account_id=event.actor_id,
+            verb="extend_org_deadline", target_org_id=org.id,
+            target_ref=audit_ref, reason=event.reason,
+        ))
+    else:
+        await append_audit(
+            session, verb="extend_org_deadline", target_org_id=org.id,
+            target_ref=audit_ref, reason=event.reason,
+        )
+    operation.status = "applied"
+    operation.resulting_sequence = event.sequence
+    operation.resolved_at = now()
+
+
 async def lifecycle_view(
     session: AsyncSession, org_id: UUID, head: HistoryHead
 ) -> OrgLifecycleView:
     projection = await identity_service.lifecycle_projection(session, org_id)
     if projection is None:
         raise not_found()
-    org, term, policy = projection
+    org, term, _ = projection
     if head.sequence != org.lifecycle_sequence:
         raise ProblemError(catalog.LIFECYCLE_HISTORY_UNVERIFIED)
     pending = (await session.execute(
@@ -377,6 +915,10 @@ async def lifecycle_view(
             OrgLifecycleOperation.status == "pending",
         )
     )).scalar_one_or_none()
+    restrictions = (await session.execute(
+        select(OrgDeletionRestriction).where(OrgDeletionRestriction.org_id == org_id)
+        .order_by(OrgDeletionRestriction.created_at.desc(), OrgDeletionRestriction.id.desc())
+    )).scalars().all()
     access_status: Literal["unconfigured", "scheduled", "available", "hold", "purging"]
     if org.lifecycle_status == "purging":
         access_status = "purging"
@@ -392,15 +934,10 @@ async def lifecycle_view(
         access_status = "available"
     projected: datetime | None = None
     if term is not None:
-        if term.retention_policy_reference == DEFAULT_POLICY_REFERENCE:
-            projected = retention_deadline(term.ends_at, 90, "elapsed_days", None)
-        elif policy is not None and policy.policy_reference == term.retention_policy_reference:
-            projected = retention_deadline(
-                term.ends_at, policy.period_value, cast(RetentionUnit, policy.period_unit),
-                policy.calendar_timezone,
-            )
-        else:
-            raise ProblemError(catalog.RETENTION_POLICY_UNVERIFIED)
+        period_value, period_unit, calendar_timezone = await _term_policy(session, term)
+        projected = retention_deadline(
+            term.ends_at, period_value, period_unit, calendar_timezone,
+        )
     return OrgLifecycleView(
         org_id=org.id, lifecycle_status=cast(Literal["active", "offboarding", "purging"], org.lifecycle_status),
         access_status=access_status, lifecycle_sequence=org.lifecycle_sequence,
@@ -421,6 +958,13 @@ async def lifecycle_view(
         offboarding_started_by=org.offboarding_started_by,
         purge_eligible_at=org.purge_eligible_at,
         retention_policy_reference=org.retention_policy_reference,
+        restrictions=[OrgRestrictionView.model_validate({
+            "id": item.id, "org_id": item.org_id,
+            "offboarding_id": item.offboarding_id, "scope": item.scope,
+            "status": item.status, "created_at": item.created_at,
+            "released_at": item.released_at,
+            "related_request_id": item.related_request_id,
+        }) for item in restrictions],
     )
 
 

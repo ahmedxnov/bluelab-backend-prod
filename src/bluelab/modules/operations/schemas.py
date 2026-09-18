@@ -8,7 +8,7 @@ models are checked against it by the conformance diff, they do not define it.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -177,6 +177,71 @@ class OrgServiceTermCommand(_Request):
         return self
 
 
+class OrgRetentionPolicyCommand(OrgRetentionPeriodInput):
+    expected_sequence: Annotated[int, Field(ge=0)]
+    contract_reference: Annotated[str, Field(min_length=1)]
+    reason: Annotated[str, Field(min_length=1)]
+
+
+class OrgLifecycleCommand(_Request):
+    expected_sequence: Annotated[int, Field(ge=0)]
+    reason: Annotated[str, Field(min_length=1)]
+
+
+class OrgDeadlineCommand(OrgLifecycleCommand):
+    purge_eligible_at: datetime
+
+    @model_validator(mode="after")
+    def _utc_instant(self) -> OrgDeadlineCommand:
+        if self.purge_eligible_at.tzinfo is None:
+            raise ValueError("purge_eligible_at requires a timezone")
+        self.purge_eligible_at = self.purge_eligible_at.astimezone(UTC)
+        return self
+
+
+class OrgRestrictionCommand(OrgLifecycleCommand):
+    scope: Annotated[str, Field(min_length=1)]
+    authority_ref: Annotated[str, Field(min_length=1)]
+    release_condition: Annotated[str, Field(min_length=1)]
+    related_request_id: UUID | None = None
+
+
+class OrgRestrictionReleaseCommand(OrgLifecycleCommand):
+    evidence_reference: Annotated[str, Field(min_length=1)]
+
+
+class OrgRestrictionView(BaseModel):
+    id: UUID
+    org_id: UUID
+    offboarding_id: UUID | None
+    scope: str
+    status: Literal["active", "released", "completed_before_arrival"]
+    created_at: datetime
+    released_at: datetime | None = None
+    related_request_id: UUID | None = None
+
+
+class OrgPurgeStepView(BaseModel):
+    step_key: str
+    batch_key: str
+    status: Literal["authorized", "completed", "failed"]
+    deleted_count: int = 0
+
+
+class OrgPurgeView(BaseModel):
+    purge_run_id: UUID
+    org_id: UUID
+    offboarding_id: UUID
+    status: Literal[
+        "pending", "running", "paused_restriction", "retry_pending",
+        "needs_attention", "completed",
+    ]
+    destructive_started: bool
+    steps: list[OrgPurgeStepView]
+    verification_summary: dict[str, Any] = Field(default_factory=dict)
+    completed_at: datetime | None = None
+
+
 class OrgLifecycleView(BaseModel):
     org_id: UUID
     lifecycle_status: Literal["active", "offboarding", "purging"]
@@ -199,7 +264,7 @@ class OrgLifecycleView(BaseModel):
     offboarding_started_by: UUID | None = None
     purge_eligible_at: datetime | None = None
     retention_policy_reference: str | None = None
-    restrictions: list[dict[str, Any]] = Field(default_factory=list)
+    restrictions: list[OrgRestrictionView] = Field(default_factory=list)
 
 
 class OrgRetentionPolicyView(BaseModel):
@@ -259,6 +324,18 @@ class SubjectRequestCreate(OpsReasonBody):
     subject_id: UUID
 
 
+class SubjectRequestStateCommand(OpsReasonBody):
+    expected_status: Literal["pending", "processing", "awaiting_input", "ready", "failed"]
+    status: Literal["awaiting_input", "pending", "rejected", "withdrawn", "delivered"]
+    evidence_reference: Annotated[str | None, Field(min_length=1)] = None
+
+    @model_validator(mode="after")
+    def _terminal_evidence(self) -> SubjectRequestStateCommand:
+        if self.status in {"rejected", "withdrawn", "delivered"} and not self.evidence_reference:
+            raise ValueError("terminal state requires evidence_reference")
+        return self
+
+
 class ErasureRequestView(BaseModel):
     id: UUID
     org_id: UUID
@@ -300,6 +377,18 @@ class AuditEntry(BaseModel):
         "resolve_fault",
         "execute_erasure",
         "execute_export",
+        "confirm_org_term",
+        "renew_org_term",
+        "start_org_offboarding",
+        "cancel_org_offboarding",
+        "extend_org_deadline",
+        "create_org_deletion_restriction",
+        "release_org_deletion_restriction",
+        "record_post_completion_restriction",
+        "revise_org_retention_policy",
+        "inspect_org_purge_evidence",
+        "resolve_org_purge_fault",
+        "resolve_subject_request",
     ]
     target_org_id: UUID | None = None
     target_ref: dict[str, Any]

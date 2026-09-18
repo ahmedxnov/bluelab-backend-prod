@@ -37,6 +37,11 @@ class _S3:
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, BytesIO]:
         return {"Body": BytesIO(self.objects[(Bucket, Key)])}
 
+    def head_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+        if (Bucket, Key) not in self.objects:
+            raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+        return {}
+
     def list_objects_v2(
         self,
         *,
@@ -88,6 +93,8 @@ async def test_retry_finishes_backup_with_canonical_live_marker() -> None:
     with pytest.raises(ClientError):
         await ledger.arm(original)
 
+    assert await ledger.is_armed(original.request_id)
+
     retried = ErasureMarker(
         request_id=original.request_id,
         org_id=original.org_id,
@@ -102,6 +109,7 @@ async def test_retry_finishes_backup_with_canonical_live_marker() -> None:
     key = f"erasure-ledger/{original.request_id}.json"
     assert backup.objects[("backup", key)] == live.objects[("live", key)]
     assert backup.objects[("backup", key)] == original.bytes()
+    assert not await ledger.is_armed(uuid4())
 
 
 @pytest.mark.asyncio

@@ -52,6 +52,14 @@ async def execute_erasure(
         raise SubjectRequestUnavailable("unknown erasure request")
     if request["status"] == "executed":
         return
+    if request["status"] not in {"pending", "processing"}:
+        raise SubjectRequestUnavailable("erasure request is not runnable")
+    pending = await session.scalar(text(
+        "select exists(select 1 from org_lifecycle_operation "
+        "where org_id=:org and status='pending')"
+    ), {"org": request["org_id"]})
+    if pending:
+        raise RuntimeError("lifecycle decision pending")
     if request["executed_by"] is None:
         raise SubjectRequestUnavailable("erasure request has no operator")
 
@@ -111,7 +119,7 @@ async def fail_erasure(session: AsyncSession, *, request_id: UUID) -> None:
         text(
             "update erasure_request set status='failed',"
             "evidence='{\"failure\":\"retry_exhausted\"}'::jsonb "
-            "where id=:id and status<>'executed'"
+            "where id=:id and status in ('pending','processing')"
         ),
         {"id": request_id},
     )
@@ -134,6 +142,14 @@ async def execute_export(
         raise SubjectRequestUnavailable("unknown export request")
     if request["status"] in {"ready", "delivered"}:
         return
+    if request["status"] not in {"pending", "processing"}:
+        raise SubjectRequestUnavailable("export request is not runnable")
+    pending = await session.scalar(text(
+        "select exists(select 1 from org_lifecycle_operation "
+        "where org_id=:org and status='pending')"
+    ), {"org": request["org_id"]})
+    if pending:
+        raise RuntimeError("lifecycle decision pending")
 
     subject_id: UUID = request["subject_id"]
     await session.execute(
@@ -157,6 +173,7 @@ async def execute_export(
 
     inventory, object_refs = await subject_inventory(
         session,
+        org_id=request["org_id"],
         subject_kind=request["subject_kind"],
         subject_id=subject_id,
     )
@@ -176,26 +193,37 @@ async def fail_export(session: AsyncSession, *, request_id: UUID) -> None:
     await session.execute(
         text(
             "update export_request set status='failed',bundle_object_key=null,"
-            "expires_at=null where id=:id and status not in ('ready','delivered')"
+            "expires_at=null where id=:id and status in ('pending','processing')"
         ),
         {"id": request_id},
     )
 
 
 async def subject_inventory(
-    session: AsyncSession, *, subject_kind: SubjectKind, subject_id: UUID
+    session: AsyncSession, *, org_id: UUID, subject_kind: SubjectKind, subject_id: UUID
 ) -> tuple[dict[str, list[dict[str, Any]]], list[ObjectRef]]:
     """Return the category-complete export projection without credential secrets."""
+    subject_table = "account" if subject_kind == "account" else "candidate"
+    owns_subject = await session.scalar(
+        text(f"select exists(select 1 from {subject_table} "
+             "where id=:subject and org_id=:org)"),
+        {"subject": subject_id, "org": org_id},
+    )
+    if not owns_subject:
+        raise SubjectRequestUnavailable("subject is outside request organization")
     categories: dict[str, list[dict[str, Any]]] = {}
 
     async def rows(name: str, sql: str) -> None:
-        result = (await session.execute(text(sql), {"subject": subject_id})).scalars()
+        result = (await session.execute(
+            text(sql), {"subject": subject_id, "org": org_id}
+        )).scalars()
         categories[name] = [dict(value) for value in result if value is not None]
 
     if subject_kind == "account":
         await rows(
             "identity",
-            "select to_jsonb(a)-'password_hash' data from account a where id=:subject",
+            "select to_jsonb(a)-'password_hash' data from account a "
+            "where id=:subject and org_id=:org",
         )
         participant = "a.rep_account_id=:subject"
         await rows(
@@ -215,7 +243,10 @@ async def subject_inventory(
             "select to_jsonb(t)-'token_hash' data from password_reset_token t where account_id=:subject",
         )
     else:
-        await rows("identity", "select to_jsonb(c) data from candidate c where id=:subject")
+        await rows(
+            "identity", "select to_jsonb(c) data from candidate c "
+            "where id=:subject and org_id=:org",
+        )
         participant = "a.candidate_id=:subject"
         await rows(
             "candidate_report",
@@ -268,17 +299,20 @@ async def subject_inventory(
         )
     await rows(
         "erasure_requests",
-        "select to_jsonb(r) data from erasure_request r where subject_id=:subject",
+        "select to_jsonb(r) data from erasure_request r "
+        "where subject_id=:subject and org_id=:org",
     )
     await rows(
         "export_requests",
-        "select to_jsonb(r)-'bundle_object_key' data from export_request r where subject_id=:subject",
+        "select to_jsonb(r)-'bundle_object_key' data from export_request r "
+        "where subject_id=:subject and org_id=:org",
     )
     await rows(
         "ops_audit",
-        "select to_jsonb(a) data from ops_audit a where a.target_ref @> "
+        "select to_jsonb(a) data from ops_audit a where a.target_org_id=:org "
+        "and (a.target_ref @> "
         "jsonb_build_object('subject_id',cast(:subject as text)) or a.target_ref @> "
-        "jsonb_build_object('account_id',cast(:subject as text))",
+        "jsonb_build_object('account_id',cast(:subject as text)))",
     )
 
     object_keys = {

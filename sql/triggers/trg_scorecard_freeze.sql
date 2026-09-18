@@ -31,7 +31,7 @@ declare
     attempt_status text;
     artifact_attempt_id uuid;
 begin
-    if app_in_erasure_context() then
+    if app_in_erasure_context() or app_in_purge_context() then
         return coalesce(new, old);
     end if;
 

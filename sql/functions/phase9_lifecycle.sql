@@ -114,7 +114,8 @@ begin
     if not found then raise exception 'unknown erasure request'; end if;
     if r.status='executed' then return r.evidence; end if;
     perform pg_advisory_xact_lock(hashtextextended(r.subject_id::text,0));
-    perform set_config('app.erasure_context','on',true);
+    insert into bluelab_internal.erasure_authorization(backend_pid,xact_id,request_id)
+    values (pg_backend_pid(),txid_current(),p_request_id);
 
     select coalesce(jsonb_agg(key order by key),'[]'::jsonb) into v_objects from (
         select recording_object_key key from attempt
@@ -195,6 +196,9 @@ begin
         'consent_deleted',v_consent,'terms_deleted',v_terms,
         'feedback_deleted',v_feedback,'badges_deleted',v_badges,
         'object_keys',v_objects);
+    delete from bluelab_internal.erasure_authorization
+     where backend_pid=pg_backend_pid() and xact_id=txid_current()
+       and request_id=p_request_id;
     return v_evidence;
 end $$;
 
@@ -208,11 +212,7 @@ declare
     v_second bigint := 0;
     v_objects jsonb := '[]'::jsonb;
 begin
-    if session_user <> 'bluelab' and (
-        coalesce(nullif(pg_catalog.current_setting('app.principal_kind', true), ''), '') <> 'system'
-        or coalesce(nullif(pg_catalog.current_setting('app.org_id', true), ''), '')
-           <> '00000000-0000-0000-0000-000000000000'
-    ) then
+    if session_user not in ('bluelab', 'bluelab_maintenance') then
         raise exception 'app_retention_sweep: maintenance scope required'
             using errcode = 'insufficient_privilege';
     end if;
@@ -247,7 +247,9 @@ begin
         select coalesce(jsonb_agg(bundle_object_key order by bundle_object_key),'[]'::jsonb)
           into v_objects from export_request
          where expires_at<=p_at and bundle_object_key is not null;
-        update export_request set bundle_object_key=null
+        update export_request
+           set bundle_object_key=null,
+               status=case when status='ready' then 'failed' else status end
          where expires_at<=p_at and bundle_object_key is not null;
         get diagnostics v_first=row_count;
     when 'RC-9' then
@@ -269,11 +271,7 @@ as $$
 declare
     v_result jsonb;
 begin
-    if session_user <> 'bluelab' and (
-        coalesce(nullif(pg_catalog.current_setting('app.principal_kind', true), ''), '') <> 'system'
-        or coalesce(nullif(pg_catalog.current_setting('app.org_id', true), ''), '')
-           <> '00000000-0000-0000-0000-000000000000'
-    ) then
+    if session_user not in ('bluelab', 'bluelab_maintenance') then
         raise exception 'app_stale_pending_recordings: maintenance scope required'
             using errcode = 'insufficient_privilege';
     end if;
@@ -384,11 +382,21 @@ set search_path = pg_catalog, public
 as $$
 declare
     v_count bigint;
+    v_attempt_id uuid;
+    v_org_id uuid;
 begin
     update attempt set recording_object_key=null,recording_status='unavailable'
-     where recording_object_key=p_key;
-    get diagnostics v_count=row_count;
-    if v_count>0 then return 'recording'; end if;
+     where recording_object_key=p_key
+     returning id,org_id into v_attempt_id,v_org_id;
+    if found then
+        insert into ops_fault(id,org_id,kind,attempt_id,detail)
+        select gen_random_uuid(),v_org_id,'playback_asset',v_attempt_id,'{}'::jsonb
+         where not exists (
+            select 1 from ops_fault f where f.attempt_id=v_attempt_id
+              and f.kind='playback_asset' and f.status='open'
+         );
+        return 'recording';
+    end if;
     update candidate_report set pdf_object_key=null,pdf_status='failed'
      where pdf_object_key=p_key;
     get diagnostics v_count=row_count;
@@ -408,20 +416,27 @@ revoke all on function app_change_team(uuid,uuid) from public;
 revoke all on function app_transfer_position(uuid,uuid) from public;
 revoke all on function app_subject_request_valid(uuid,text,uuid,boolean) from public;
 revoke all on function app_execute_erasure(uuid) from public;
+revoke all on function app_execute_erasure(uuid) from bluelab_app;
 revoke all on function app_retention_sweep(text,timestamptz) from public;
+revoke all on function app_retention_sweep(text,timestamptz) from bluelab_app;
 revoke all on function app_stale_pending_recordings(timestamptz) from public;
+revoke all on function app_stale_pending_recordings(timestamptz) from bluelab_app;
 revoke all on function app_verify_erasure(uuid) from public;
+revoke all on function app_verify_erasure(uuid) from bluelab_app;
 revoke all on function app_restore_erasure_marker(uuid,uuid,text,uuid,timestamptz,uuid) from public;
+revoke all on function app_restore_erasure_marker(uuid,uuid,text,uuid,timestamptz,uuid) from bluelab_app;
 revoke all on function app_object_inventory() from public;
+revoke all on function app_object_inventory() from bluelab_app;
 revoke all on function app_mark_missing_object(text) from public;
+revoke all on function app_mark_missing_object(text) from bluelab_app;
 grant execute on function app_deactivate_account(uuid) to bluelab_app;
 grant execute on function app_change_team(uuid,uuid) to bluelab_app;
 grant execute on function app_transfer_position(uuid,uuid) to bluelab_app;
 grant execute on function app_subject_request_valid(uuid,text,uuid,boolean) to bluelab_app;
-grant execute on function app_execute_erasure(uuid) to bluelab_app;
-grant execute on function app_retention_sweep(text,timestamptz) to bluelab_app;
-grant execute on function app_stale_pending_recordings(timestamptz) to bluelab_app;
-grant execute on function app_verify_erasure(uuid) to bluelab_app;
-grant execute on function app_restore_erasure_marker(uuid,uuid,text,uuid,timestamptz,uuid) to bluelab_app;
-grant execute on function app_object_inventory() to bluelab_app;
-grant execute on function app_mark_missing_object(text) to bluelab_app;
+grant execute on function app_execute_erasure(uuid) to bluelab_erasure;
+grant execute on function app_retention_sweep(text,timestamptz) to bluelab_maintenance;
+grant execute on function app_stale_pending_recordings(timestamptz) to bluelab_maintenance;
+grant execute on function app_verify_erasure(uuid) to bluelab_erasure;
+grant execute on function app_restore_erasure_marker(uuid,uuid,text,uuid,timestamptz,uuid) to bluelab_erasure;
+grant execute on function app_object_inventory() to bluelab_erasure;
+grant execute on function app_mark_missing_object(text) to bluelab_erasure;

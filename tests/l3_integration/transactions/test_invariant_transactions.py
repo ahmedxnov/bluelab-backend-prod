@@ -41,7 +41,9 @@ from bluelab.modules.review.grading import (
     write_scorecard,
 )
 from bluelab.platform.config import Settings
+from bluelab.platform.db.privileged import system_scope
 from bluelab.platform.db.scope import Role, ScopeContext, apply_scope
+from bluelab.platform.db.session import scoped_transaction
 from bluelab.platform.errors.denial import ProblemError
 from bluelab.platform.ids import new_id
 from bluelab.platform.queue.compat import JobEnvelope
@@ -86,7 +88,7 @@ def _winners(results) -> tuple[list, list]:
 
 @pytest.mark.verifies("FR-TRP-013", "AC-TRP-005")
 async def test_t1_allowance_cas_admits_exactly_one_of_two_racing_tabs(
-    engine, session, base_org, make_drill
+    phase4_app_engine, session, base_org, make_drill
 ):
     """The last remaining attempt goes to exactly one of two simultaneous tabs.
 
@@ -137,14 +139,43 @@ async def test_t1_allowance_cas_admits_exactly_one_of_two_racing_tabs(
         drill_id=drill,
         account_id=rep,
     )
-    op = lambda s: admit(s, request, consent_version=CONSENT_VERSION)
+    scope = ScopeContext.account(
+        org_id=base_org["org"], team_id=base_org["manager"],
+        account_id=rep, role=Role.REP,
+    )
 
-    winners, losers = _winners(await _race(engine, op, op))
+    async def op(s):
+        await apply_scope(s, scope)
+        return await admit(s, request, consent_version=CONSENT_VERSION)
+
+    winners, losers = _winners(await _race(phase4_app_engine, op, op))
 
     assert len(winners) == 1, "both tabs consumed the same single attempt"
     assert len(losers) == 1
     assert isinstance(losers[0], ProblemError)
     assert losers[0].problem.slug == "allowance-exhausted"
+
+    # The browser's rep scope uses a narrow definer CAS: account RLS does not
+    # grant direct UPDATE on assignment evidence.
+    async with session.begin():
+        await session.execute(text(
+            "update assignment set attempts_allowed=2 where id=:id"
+        ), {"id": assignment})
+    async def account_admit():
+        async with scoped_transaction(scope) as db:
+            return await admit(db, request, consent_version=CONSENT_VERSION)
+
+    account_results = await asyncio.gather(
+        account_admit(), account_admit(), return_exceptions=True,
+    )
+    account_winners, account_losers = _winners(account_results)
+    assert len(account_winners) == len(account_losers) == 1
+    assert isinstance(account_losers[0], ProblemError)
+    assert account_losers[0].problem.slug == "allowance-exhausted"
+    async with scoped_transaction(scope) as db:
+        assert await db.scalar(text(
+            "select app_consume_assignment_allowance(:drill,:rep)"
+        ), {"drill": drill, "rep": new_id()}) is False
 
 
 @pytest.mark.verifies("FR-LIV-004", "CMP-002")
@@ -165,6 +196,7 @@ async def test_t1_refuses_without_consent_on_record(session, base_org, make_dril
 
     with pytest.raises(ProblemError) as caught:
         async with session.begin():
+            await apply_scope(session, system_scope(org_id=base_org["org"]))
             await admit(
                 session,
                 AdmissionRequest(

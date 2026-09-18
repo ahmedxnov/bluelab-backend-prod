@@ -24,7 +24,7 @@ declare
     target_position uuid := coalesce(new.position_id, old.position_id);
     frozen boolean;
 begin
-    if app_in_erasure_context() then
+    if app_in_erasure_context() or app_in_purge_context() then
         return coalesce(new, old);
     end if;
     if tg_op = 'UPDATE' and app_scope_only_change(to_jsonb(old), to_jsonb(new)) then

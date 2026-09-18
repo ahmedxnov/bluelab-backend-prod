@@ -127,6 +127,26 @@ class CallRegistry:
                 calls.append(call)
         return calls
 
+    async def active_for_org(self, org_id: UUID) -> list[CallSession]:
+        """Enumerate nonterminal calls; provider inspection catches lost registry rows."""
+        ids = await self._client.zrange(self._RECOVERY_KEY, 0, -1)
+        calls: list[CallSession] = []
+        for raw_id in ids:
+            call = await self.get(UUID(str(raw_id)))
+            if call is not None and call.org_id == org_id and call.state is not SessionState.TERMINAL:
+                calls.append(call)
+        return calls
+
+    async def active_org_ids(self) -> set[UUID]:
+        """Find organizations with nonterminal calls for cutoff enforcement."""
+        ids = await self._client.zrange(self._RECOVERY_KEY, 0, -1)
+        orgs: set[UUID] = set()
+        for raw_id in ids:
+            call = await self.get(UUID(str(raw_id)))
+            if call is not None and call.state is not SessionState.TERMINAL:
+                orgs.add(call.org_id)
+        return orgs
+
     async def due_recordings(
         self, *, now_epoch: int | None = None
     ) -> list[CallSession]:

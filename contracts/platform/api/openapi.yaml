@@ -2618,6 +2618,7 @@ paths:
     post:
       tags: [Ops]
       summary: Record a deletion restriction
+      description: The episode path identifies the decision context. The accepted restriction applies to the organization across later episodes until released.
       operationId: opsCreateOrgDeletionRestriction
       security:
         - opsSessionCookie: []
@@ -2640,23 +2641,23 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/OrgLifecycleConflict" }
 
-  /ops/v1/orgs/{org_id}/offboarding/{offboarding_id}/restrictions/{restriction_id}/release:
+  /ops/v1/orgs/{org_id}/restrictions/{restriction_id}/release:
     post:
       tags: [Ops]
       summary: Release a deletion restriction on documented evidence
+      description: Releases an organization-scoped restriction after its documented obligation is resolved. The restriction identifier selects one accepted before or during offboarding. Renewal or hold supersession does not release it.
       operationId: opsReleaseOrgDeletionRestriction
       security:
         - opsSessionCookie: []
       parameters:
         - $ref: "#/components/parameters/OrgIdParam"
-        - $ref: "#/components/parameters/OffboardingIdParam"
         - $ref: "#/components/parameters/RestrictionIdParam"
         - $ref: "#/components/parameters/LifecycleOperationIdHeader"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/OrgLifecycleCommand" }
+            schema: { $ref: "#/components/schemas/OrgRestrictionReleaseCommand" }
       responses:
         "200":
           description: Restriction release recorded.
@@ -2965,13 +2966,16 @@ paths:
       tags: [Ops]
       summary: Create an erasure request (CMP-001)
       description: >
-        Accepts subject erasure — account or candidate — with any required source-data
-        restriction before queuing the dedicated procedure that
+        Accepts subject erasure — account or candidate — with an organization-scoped source-data
+        restriction when source data is required, including before any offboarding episode exists.
+        The response follows durable restriction acceptance and projection that queues the dedicated procedure that
         removes the person and leaves the statistical residue, reaching the object store as well
         (ADR-0033, data 03 §3). Audited with reason; evidence counts land on the request.
       operationId: opsCreateErasureRequest
       security:
         - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
       requestBody:
         required: true
         content:
@@ -2990,7 +2994,7 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "409":
-          description: "Problem type: source-unavailable; assess remaining obligations from retained evidence."
+          description: "Problem types: source-unavailable, operation-id-reuse; assess remaining obligations from retained evidence."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -3000,6 +3004,7 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ValidationProblem" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/OrgLifecycleUnavailable" }
 
   /ops/v1/erasure-requests/{request_id}:
     get:
@@ -3029,6 +3034,7 @@ paths:
         - opsSessionCookie: []
       parameters:
         - $ref: "#/components/parameters/RequestIdParam"
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
       requestBody:
         required: true
         content:
@@ -3073,10 +3079,12 @@ paths:
     post:
       tags: [Ops]
       summary: Create a data export request (CMP-001)
-      description: Accepts a subject data-export request with its source-data restriction before queuing; the bundle auto-expires (data 03 §2). Audited with reason.
+      description: Accepts a subject data-export request with its organization-scoped source-data restriction, including before an offboarding episode exists, before queuing; the bundle auto-expires (data 03 §2). Audited with reason.
       operationId: opsCreateExportRequest
       security:
         - opsSessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
       requestBody:
         required: true
         content:
@@ -3095,7 +3103,7 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "409":
-          description: "Problem type: source-unavailable; assess remaining obligations from retained evidence."
+          description: "Problem types: source-unavailable, operation-id-reuse; assess remaining obligations from retained evidence."
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
@@ -3105,6 +3113,7 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ValidationProblem" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "503": { $ref: "#/components/responses/OrgLifecycleUnavailable" }
 
   /ops/v1/export-requests/{request_id}:
     get:
@@ -3134,6 +3143,7 @@ paths:
         - opsSessionCookie: []
       parameters:
         - $ref: "#/components/parameters/RequestIdParam"
+        - $ref: "#/components/parameters/LifecycleOperationIdHeader"
       requestBody:
         required: true
         content:
@@ -4736,6 +4746,7 @@ components:
         retention_policy_reference: { type: [string, "null"] }
         restrictions:
           type: array
+          description: Active and retained organization restrictions, including those recorded before an offboarding episode.
           items: { $ref: "#/components/schemas/OrgRestrictionView" }
 
     OrgRetentionPolicyCommand:
@@ -4776,15 +4787,23 @@ components:
         release_condition: { type: string, minLength: 1 }
         related_request_id: { type: [string, "null"], format: uuid }
 
+    OrgRestrictionReleaseCommand:
+      type: object
+      required: [expected_sequence, reason, evidence_reference]
+      properties:
+        expected_sequence: { type: integer, minimum: 0 }
+        reason: { type: string, minLength: 1 }
+        evidence_reference: { type: string, minLength: 1, description: Reference to documented resolution evidence without customer content. }
+
     OrgRestrictionView:
       type: object
       required: [id, org_id, offboarding_id, scope, status, created_at]
       properties:
         id: { type: string, format: uuid }
         org_id: { type: string, format: uuid }
-        offboarding_id: { type: string, format: uuid }
+        offboarding_id: { type: [string, "null"], format: uuid, description: Episode present at acceptance when one exists; applicability follows org_id. }
         scope: { type: string }
-        status: { type: string, enum: [active, released, completed_before_arrival] }
+        status: { type: string, enum: [active, released, completed_before_arrival], description: completed_before_arrival is a retained-evidence view outcome after verified purge completion; stored restriction rows use active or released. }
         created_at: { type: string, format: date-time }
         released_at: { type: [string, "null"], format: date-time }
         related_request_id: { type: [string, "null"], format: uuid }
@@ -4833,8 +4852,9 @@ components:
       type: object
       description: >
         CMP-001 subject-rights request for a rep, manager, or candidate. Acceptance applies
-        the approved current request-policy version and records any source-data restriction
-        before the worker can run.
+        the approved current request-policy version and durably records any required organization-scoped
+        source-data restriction before the worker can run. Lifecycle-Operation-Id identifies the accepted
+        request and restriction decision across retries.
       required: [org_id, subject_kind, subject_id, reason]
       properties:
         org_id: { type: string, format: uuid }
@@ -4849,11 +4869,14 @@ components:
         expected_status: { type: string, enum: [pending, processing, awaiting_input, ready, failed] }
         status: { type: string, enum: [awaiting_input, pending, rejected, withdrawn, delivered] }
         reason: { type: string, minLength: 1 }
-        evidence_reference: { type: [string, "null"] }
+        evidence_reference: { type: [string, "null"], description: "Required for rejected, withdrawn, or delivered; contains no customer content." }
       description: >
         An authorized operator records information wait, resumption, delivery, rejection, or
-        withdrawal. The server derives the 30-day UTC response deadline and reconciles the
-        corresponding deletion restriction before a terminal decision is reported complete.
+        withdrawal under subject-rights:v1 (data 03 §6). The server derives the 30-day UTC
+        response deadline from the accepted awaiting_input decision. Processing requests require
+        worker-outcome reconciliation before operator closure; an armed erasure marker forbids
+        rejection or withdrawal. A terminal decision and its restriction release share one ordered
+        projection. Lifecycle-Operation-Id identifies the decision across retries.
 
     ErasureRequestView:
       type: object
@@ -4889,7 +4912,7 @@ components:
         requested_at: { type: string, format: date-time }
         ready_at: { type: [string, "null"], format: date-time }
         expires_at: { type: [string, "null"], format: date-time, description: Bundle auto-delete (data 03 §2). }
-        bundle_url: { type: [string, "null"], format: uri, description: Audited single-bundle delivery capability with at most one-hour lifetime when ready. }
+        bundle_url: { type: [string, "null"], format: uri, description: Audited single-bundle delivery capability with at most one-hour lifetime while delivery is owed; issuance alone leaves status ready. }
 
     AuditEntry:
       type: object

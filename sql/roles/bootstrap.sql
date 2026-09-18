@@ -15,18 +15,34 @@
 \else
   \set app_role bluelab_app
 \endif
+\if :{?erasure_role}
+\else
+  \set erasure_role bluelab_erasure
+\endif
+\if :{?maintenance_role}
+\else
+  \set maintenance_role bluelab_maintenance
+\endif
 \if :{?role_password}
 \else
   \set role_password bluelab
+\endif
+\if :{?erasure_role_password}
+\else
+  \set erasure_role_password bluelab
+\endif
+\if :{?maintenance_role_password}
+\else
+  \set maintenance_role_password bluelab
 \endif
 \if :{?database_name}
 \else
   \set database_name bluelab
 \endif
 
--- POSTGRES_USER is the cluster bootstrap identity. These two identities are
--- created separately so neither application traffic nor SECURITY DEFINER helper
--- ownership inherits superuser power from the container entrypoint.
+-- POSTGRES_USER is the cluster bootstrap identity. The migration, application,
+-- erasure-worker, and maintenance-worker identities are separate from the
+-- container superuser.
 select format(
   'create role %I login password %L bypassrls createrole',
   :'migration_role',
@@ -47,6 +63,26 @@ where not exists (
 )
 \gexec
 
+select format(
+  'create role %I login password %L',
+  :'erasure_role',
+  :'erasure_role_password'
+)
+where not exists (
+  select 1 from pg_catalog.pg_roles where rolname = :'erasure_role'
+)
+\gexec
+
+select format(
+  'create role %I login password %L',
+  :'maintenance_role',
+  :'maintenance_role_password'
+)
+where not exists (
+  select 1 from pg_catalog.pg_roles where rolname = :'maintenance_role'
+)
+\gexec
+
 -- Converge old/local clusters too: creation guards alone would preserve an
 -- earlier over-grant forever.
 select format(
@@ -61,6 +97,25 @@ select format(
   :'app_role',
   :'role_password'
 )
+\gexec
+
+select format(
+  'alter role %I login password %L nosuperuser nobypassrls nocreaterole',
+  :'erasure_role',
+  :'erasure_role_password'
+)
+\gexec
+
+select format(
+  'alter role %I login password %L nosuperuser nobypassrls nocreaterole',
+  :'maintenance_role',
+  :'maintenance_role_password'
+)
+\gexec
+
+select format('grant %I to %I', :'app_role', :'erasure_role')
+\gexec
+select format('grant %I to %I', :'app_role', :'maintenance_role')
 \gexec
 
 select format(

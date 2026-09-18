@@ -711,10 +711,11 @@ async def provision_org(
     name: str,
     registered_domain: str,
     timezone: str,
+    org_id: UUID | None = None,
 ) -> Org:
     """Create one customer tenancy shell through the identity service boundary."""
     org = Org(
-        id=new_id(),
+        id=org_id or new_id(),
         name=name,
         registered_domain=registered_domain,
         timezone=timezone,

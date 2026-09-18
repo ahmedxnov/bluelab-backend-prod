@@ -78,7 +78,37 @@ ORG_LIFECYCLE_OPERATION = REGISTRY.register(
     )
 )
 
+ORG_DELETION_RESTRICTION = REGISTRY.register(
+    TablePolicy(
+        table="org_deletion_restriction",
+        policy_class=PolicyClass.P9_OPS,
+        org_scoped=True,
+        team_scoped=False,
+    )
+)
+
+ORG_PURGE_RUN = REGISTRY.register(
+    TablePolicy(
+        table="org_purge_run",
+        policy_class=PolicyClass.P9_OPS,
+        org_scoped=True,
+        team_scoped=False,
+    )
+)
+
+ORG_PURGE_STEP = REGISTRY.register(
+    TablePolicy(
+        table="org_purge_step",
+        policy_class=PolicyClass.P9_OPS,
+        org_scoped=False,
+        team_scoped=False,
+    )
+)
+
 DECLARED = (
     OPS_ACCOUNT, OPS_AUDIT, OPS_FAULT, ERASURE_REQUEST, EXPORT_REQUEST,
     ORG_LIFECYCLE_OPERATION,
+    ORG_DELETION_RESTRICTION,
+    ORG_PURGE_RUN,
+    ORG_PURGE_STEP,
 )

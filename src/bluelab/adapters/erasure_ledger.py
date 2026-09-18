@@ -43,6 +43,8 @@ class ErasureLedger(Protocol):
 
     async def markers(self) -> list[ErasureMarker]: ...
 
+    async def is_armed(self, request_id: UUID) -> bool: ...
+
 
 class S3ErasureLedger:
     """Write identical, immutable markers to live and off-provider buckets."""
@@ -182,6 +184,25 @@ class S3ErasureLedger:
                 break
             continuation_token = str(response["NextContinuationToken"])
         return markers
+
+    async def is_armed(self, request_id: UUID) -> bool:
+        """Treat a marker in either durability copy as irreversible."""
+        from botocore.exceptions import ClientError
+
+        key = f"erasure-ledger/{request_id}.json"
+        found = False
+        for client, bucket in (
+            (self._client, self._live),
+            (self._backup_client, self._backup),
+        ):
+            try:
+                await asyncio.to_thread(client.head_object, Bucket=bucket, Key=key)
+                found = True
+            except ClientError as exc:
+                code = str(exc.response.get("Error", {}).get("Code", ""))
+                if code not in {"404", "NoSuchKey", "NotFound"}:
+                    raise
+        return found
 
 
 def create_erasure_ledger(settings: Settings) -> S3ErasureLedger:

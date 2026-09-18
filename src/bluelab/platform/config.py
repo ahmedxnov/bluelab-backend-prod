@@ -29,7 +29,6 @@ class Plane(StrEnum):
 
     API = "api"
     WORKER = "worker"
-    SWEEPER = "sweeper"
 
 
 class Environment(StrEnum):
@@ -96,6 +95,10 @@ class Settings(BaseSettings):
     )
     lifecycle_history_bucket: str = Field(
         default="bluelab-lifecycle-history", alias="LIFECYCLE_HISTORY_BUCKET"
+    )
+    lifecycle_history_backup_bucket: str = Field(
+        default="bluelab-lifecycle-history-backup",
+        alias="LIFECYCLE_HISTORY_BACKUP_BUCKET",
     )
     lifecycle_history_kms_key_id: str | None = Field(
         default=None, alias="LIFECYCLE_HISTORY_KMS_KEY_ID"
@@ -187,6 +190,10 @@ class Settings(BaseSettings):
     livekit_url: str | None = Field(default=None, alias="LIVEKIT_URL")
     livekit_api_key: SecretStr | None = Field(default=None, alias="LIVEKIT_API_KEY")
     livekit_api_secret: SecretStr | None = Field(default=None, alias="LIVEKIT_API_SECRET")
+    livekit_token_revocation_supported: bool = Field(
+        default=False, alias="LIVEKIT_TOKEN_REVOCATION_SUPPORTED"
+    )
+    org_purge_enabled: bool = Field(default=False, alias="ORG_PURGE_ENABLED")
     call_capacity: int = Field(default=10, ge=1, alias="CALL_CAPACITY")
     call_capacity_retry_seconds: int = Field(default=15, ge=1, le=300, alias="CALL_CAPACITY_RETRY_SECONDS")
     call_lease_seconds: int = Field(default=960, ge=930, le=1800, alias="CALL_LEASE_SECONDS")
@@ -321,6 +328,14 @@ class Settings(BaseSettings):
         ):
             raise ValueError(
                 "ERASURE_BACKUP_ACCESS_KEY and ERASURE_BACKUP_SECRET_KEY must be set together"
+            )
+        if self.org_purge_enabled and (
+            not self.livekit_token_revocation_supported
+            or self.lifecycle_history_kms_key_id is None
+        ):
+            raise ValueError(
+                "ORG_PURGE_ENABLED requires provider token revocation and "
+                "encrypted independent lifecycle evidence"
             )
         app_url = urlsplit(self.public_app_url)
         if (

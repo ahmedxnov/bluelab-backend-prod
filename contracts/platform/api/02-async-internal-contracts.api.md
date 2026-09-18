@@ -181,7 +181,7 @@ what makes retries safe.
 | `extract_facts` | `{upload_id}` | `document_upload.status` transition `received→extracting→extracted|failed`; re-run of a terminal upload is a no-op | `POST /product-documents/{id}/uploads` | On failure/empty: `status='failed'` + reason; nothing reaches review; live facts untouched ([FR-KNW-008](../specs/11-knowledge.spec.md)). Retry = new upload POST re-running extraction on the same stored object |
 | `render_report` | `{candidate_id}` | `candidate_report` upsert keyed on `candidate_id`; PDF render conditional on `pdf_status in (none,failed)` | Candidate completion (T-2 candidate variant); `POST /candidates/{id}/report/render` (manager retry when `failed`) | On failure: `pdf_status='failed'`; report view still renders from data ([FR-HIR-011](../specs/22-hiring-manager.spec.md)); takeaway synthesis via C-6 inside this job ([00-overview.arch §3.3](../architecture/00-overview.arch.md)) |
 | `dispatch_email` | `{email_send_id}` | `email_send (kind, dedupe_key)` unique — at most one send per (recipient, event) ([04-deps §2.6](../architecture/04-dependencies-and-capabilities.arch.md)) | T-7 (invites), T-9 (shortlist), account provisioning, completion/decision events per policy | Backoff retry; terminal failure sets `email_send.status='failed'`; E-2 delivery state feeds the pipeline view ([FR-HIR-010](../specs/22-hiring-manager.spec.md)) |
-| `execute_erasure` | `{request_id}` | `erasure_request.id`; a write-once replay marker arms the request before mutation, the database procedure is idempotent over the erasure matrix, object deletes are idempotent by exact key, and zero-remain verification converges on replay | Accepted `pending` request with its source-data restriction | Sets `processing`; retryable failure leaves `failed` with its fence and restriction in force; verified success sets `executed`, `executed_at`, and per-category evidence ([SEC-018](../specs/02-security-requirements.spec.md)) |
+| `execute_erasure` | `{request_id}` | `erasure_request.id`; a write-once replay marker arms the request before mutation, the database procedure is idempotent over the erasure matrix, object deletes are idempotent by exact key, and zero-remain verification converges on replay | Accepted `pending` request with its source-data restriction; conditional status claim and marker check exclude a terminal operator decision | Sets `processing`; retryable failure leaves `failed` with its fence and restriction in force; verified success and ordered restriction release set `executed`, `executed_at`, and per-category evidence ([SEC-018](../specs/02-security-requirements.spec.md)) |
 | `execute_export` | `{request_id}` | `export_request.id` and the fixed object key `exports/{request_id}.zip`; assembly replaces that exact object and the ready transition is conditional on `processing` | Accepted `pending` request with its source-data restriction | Sets `processing`; retryable failure leaves `failed` and the restriction in force; success sets `ready`, `ready_at`, `expires_at`, and the fixed bundle key until delivery obligations resolve |
 
 The job catalogue above contains eight contracted job kinds. The organization term-transition job is
@@ -267,20 +267,35 @@ organization-purge batch path authorized separately ([ADR-0033](../data/adr/0033
 [data 03 §3–4](../data/03-lifecycle-retention-erasure.data.md)). The interface contract: requests carry
 `{org_id, subject_kind, subject_id, reason}`; status is polled on the request resource
 (`pending → processing → executed|failed` for erasure; export additionally reaches `ready` and
-`delivered`; `awaiting_input`, `rejected`, and `withdrawn` follow the recorded request policy); evidence
+`delivered`; `awaiting_input`, `rejected`, and `withdrawn` follow `subject-rights:v1` in
+[data 03 §6](../data/03-lifecycle-retention-erasure.data.md)); evidence
 counts land on the request row. Erasure reaches the object store (recordings, PDFs, bundles) as well as
 rows — [CMP-001](../specs/01-nfr-and-compliance.spec.md)'s full reach.
 
-Acceptance of either request that needs source data records an applicable deletion restriction in
-the lifecycle history before its job can be authorized. Creating either request transactionally
-enqueues its job by `request_id` after that restriction is applied. An `awaiting_input` request has
+Acceptance of either request that needs source data records an organization-scoped deletion restriction
+in the lifecycle history, including while the organization has no offboarding episode. A stable
+operation identity resolves uncertain acceptance. The accepted event projects the request,
+restriction, audit record, and job enqueue in one application transaction; the response follows
+successful projection. Pending operations fence purge claim and destructive authorization, and the
+job cannot run before its restriction is applied. An `awaiting_input` request has
 a recorded response deadline and remains restricted until an authorized, audited closure.
-Any erasure request is a durable
-work fence for its subject, including a failed request: subject-related grading, report, generation, and email
-workers reject the subject while the fence exists. `execute_erasure` writes the request's replay marker to the
+
+The accepted restriction event carries the request kind, request and restriction identifiers,
+organization and subject identifiers, request-policy reference, acceptance time, operator and audit
+identifiers, sanitized reason, initial state, restriction scope, authority reference and release
+condition, and request-keyed job identity. Replay
+projects the request, restriction, audit record, and one job enqueue from that protected event.
+Nonterminal state decisions use an ordered `set_subject_request_state` event. Terminal request
+decisions and restriction release share one `release_restriction` operation identity and projection;
+release addresses the organization and restriction, including when no episode exists.
+An erasure request in `pending`, `processing`, `awaiting_input`, or `failed` fences subject-related
+grading, report, generation, and email work. An armed replay marker makes that fence permanent.
+An unarmed `rejected` or `withdrawn` request stops fencing only after ordered restriction release.
+`execute_erasure` writes the request's replay marker to the
 independent compliance ledger before it invokes the database procedure, waits for or cancels already-claimed
 subject work, deletes the exact object keys returned by the procedure, performs category-by-category
-zero-remain verification, and only then marks the request executed. A ledger-write failure leaves the request
+zero-remain verification, and projects an ordered restriction release with the executed state and
+evidence. A ledger-write failure leaves the request
 pending and permits no erasure mutation. Restore reconciliation recreates missing request rows from the
 ledger when their organization remains live. When a verified organization purge removes the organization,
 independent evidence records the subject-erasure outcome for its proven overlapping scope and remaining

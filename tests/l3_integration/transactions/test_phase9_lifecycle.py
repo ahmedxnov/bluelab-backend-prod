@@ -21,7 +21,10 @@ from bluelab.entrypoints.restore_reconcile import ensure_replay_pending
 from bluelab.modules.drills.service import archive_drill
 from bluelab.modules.hiring.service import replace_assessment
 from bluelab.modules.operations.retention import sweep, sweep_stale_recordings
-from bluelab.modules.operations.subject_rights import execute_erasure
+from bluelab.modules.operations.subject_rights import (
+    SubjectRequestUnavailable,
+    execute_erasure,
+)
 from bluelab.modules.training.assignment import put_assignment
 from bluelab.platform.errors.denial import ProblemError
 from bluelab.platform.ids import new_id
@@ -66,6 +69,25 @@ class MemoryObjects:
 class FailingObjects(MemoryObjects):
     async def delete(self, ref: ObjectRef, *, reason: DeletionReason) -> None:
         raise RuntimeError("simulated object deletion failure")
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_erasure_cannot_run_from_stale_queue(session, base_org) -> None:
+    request_id = new_id()
+    ledger = MemoryLedger()
+    async with session.begin():
+        await session.execute(text(
+            "insert into erasure_request(id,org_id,subject_kind,subject_id,status,"
+            "request_policy_reference) values(:id,:org,'account',:subject,'withdrawn',"
+            "'subject-rights:v1')"
+        ), {"id": request_id, "org": base_org["org"], "subject": base_org["manager"]})
+        with pytest.raises(SubjectRequestUnavailable):
+            await execute_erasure(
+                session, request_id=request_id, ledger=ledger,
+                object_store=MemoryObjects({}),
+            )
+        assert ledger.armed == {}
+        await session.execute(text("delete from erasure_request where id=:id"), {"id": request_id})
 
 
 @pytest.mark.asyncio
@@ -378,6 +400,11 @@ async def test_erasure_deletes_personal_content_and_preserves_score_residue(
         await session.execute(text("insert into terms_acceptance(id,org_id,candidate_id,terms_version,privacy_version) values(:id,:org,:candidate,'v1','v1')"), {"id": new_id(), "org": base_org["org"], "candidate": candidate})
         await session.execute(text("insert into erasure_request(id,org_id,subject_kind,subject_id,request_policy_reference,executed_by) values(:id,:org,'candidate',:candidate,'subject-rights:v1',:operator)"), {"id": request, "org": base_org["org"], "candidate": candidate, "operator": operator})
         await execute_erasure(session, request_id=request, ledger=ledger, object_store=objects)
+        assert not await session.scalar(text("select app_in_erasure_context()"))
+        assert not await session.scalar(text(
+            "select exists(select 1 from bluelab_internal.erasure_authorization "
+            "where backend_pid=pg_backend_pid() and xact_id=txid_current())"
+        ))
     async with session.begin():
         candidate_row = (await session.execute(text("select * from candidate where id=:id"), {"id": candidate})).mappings().one()
         assert candidate_row["name"] == "Erased person"

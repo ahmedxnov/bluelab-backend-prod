@@ -147,6 +147,33 @@ async def _seed_fault_world(client, engine) -> dict[str, UUID]:
     return ids
 
 
+async def test_restore_missing_recording_opens_identity_only_fault(
+    ops_client, ops_world, operations_engine,
+) -> None:
+    await _sign_in(ops_client, ops_world)
+    ids = await _seed_fault_world(ops_client, operations_engine)
+    key = ObjectRef.recording(
+        org_id=ids["org"], attempt_id=ids["grading_attempt"],
+    ).key
+    maker = async_sessionmaker(operations_engine, expire_on_commit=False)
+    async with maker() as db, db.begin():
+        await db.execute(text(
+            "update attempt set recording_status='available',recording_object_key=:key "
+            "where id=:attempt"
+        ), {"key": key, "attempt": ids["grading_attempt"]})
+        category = await db.scalar(text(
+            "select app_mark_missing_object(:key)"
+        ), {"key": key})
+        assert category == "recording"
+        assert await db.scalar(text(
+            "select recording_status from attempt where id=:attempt"
+        ), {"attempt": ids["grading_attempt"]}) == "unavailable"
+        assert await db.scalar(text(
+            "select count(*) from ops_fault where attempt_id=:attempt "
+            "and kind='playback_asset' and status='open'"
+        ), {"attempt": ids["grading_attempt"]}) == 1
+
+
 @pytest.mark.verifies("FR-SCR-009", "FR-SCR-013", "SEC-040")
 async def test_faults_are_content_free_and_redrive_only_named_identity(
     ops_client,

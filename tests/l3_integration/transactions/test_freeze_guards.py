@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import create_async_engine
+from tests.support import required_url
 
 pytestmark = [
     pytest.mark.l3_integration,
@@ -477,38 +480,22 @@ async def test_transcript_cannot_be_edited(session, graded_attempt):
 # ── the erasure exemption ────────────────────────────────────────────────────
 
 @pytest.mark.verifies("CMP-001")
-async def test_erasure_context_crosses_the_freeze_guard(session, graded_attempt):
-    """Erasure is the ONE sanctioned writer through a freeze guard (ADR-0033).
-
-    Without this the guards would make the product non-compliant: a scorecard
-    that can never be touched is a scorecard whose quotes can never be erased.
-    The person is removed and the statistical residue stands — so the guard has
-    to yield to exactly one caller and no other.
-    """
-    async with session.begin():
-        await session.execute(text("set local app.erasure_context = 'on'"))
-        await session.execute(
-            text("update scorecard set takeaway = null where id = :id"),
-            {"id": graded_attempt["scorecard"]},
-        )
-
-    takeaway = (
-        await session.execute(
-            text("select takeaway from scorecard where id = :id"),
-            {"id": graded_attempt["scorecard"]},
-        )
-    ).scalar_one()
-    assert takeaway is None
+async def test_custom_erasure_guc_cannot_cross_freeze_guard(session, graded_attempt):
+    """A caller-controlled GUC never authorizes a frozen write (ADR-0033)."""
+    with pytest.raises(DBAPIError) as caught:
+        async with session.begin():
+            await session.execute(text("set local app.erasure_context = 'on'"))
+            await session.execute(
+                text("update scorecard set takeaway = 'tampered' where id = :id"),
+                {"id": graded_attempt["scorecard"]},
+            )
+    assert "insert-only" in str(caught.value)
+    await session.rollback()
 
 
 @pytest.mark.verifies("ADR-0033")
-async def test_erasure_context_does_not_leak_to_the_next_transaction(session, graded_attempt):
-    """`SET LOCAL` scope, asserted.
-
-    If the erasure context survived its transaction, a pooled connection would
-    hand the next request a session that can rewrite frozen records. The guard
-    must be back in force here.
-    """
+async def test_custom_erasure_guc_cannot_authorize_a_later_transaction(session, graded_attempt):
+    """A caller-set GUC is inert within its transaction and after commit."""
     async with session.begin():
         await session.execute(text("set local app.erasure_context = 'on'"))
 
@@ -518,6 +505,49 @@ async def test_erasure_context_does_not_leak_to_the_next_transaction(session, gr
         {"id": graded_attempt["scorecard"]},
         matching="insert-only",
     )
+
+
+@pytest.mark.verifies("ADR-0033")
+async def test_application_role_cannot_open_private_erasure_capability(phase4_app_engine):
+    """Direct SQL from the application role cannot enable the guard exemption."""
+    async with phase4_app_engine.connect() as connection:
+        with pytest.raises(DBAPIError) as caught:
+            async with connection.begin():
+                await connection.execute(text(
+                    "insert into bluelab_internal.erasure_authorization"
+                    "(backend_pid,xact_id,request_id) "
+                    "values(pg_backend_pid(),txid_current(),"
+                    "'00000000-0000-0000-0000-000000000000')"
+                ))
+        assert "permission denied for schema bluelab_internal" in str(caught.value)
+
+
+@pytest.mark.verifies("ADR-0033")
+async def test_only_erasure_database_role_can_invoke_procedure(phase4_app_engine):
+    """The API database credential cannot call the definer erasure procedure."""
+    unknown = "00000000-0000-0000-0000-000000000000"
+    async with phase4_app_engine.connect() as connection:
+        with pytest.raises(DBAPIError) as denied:
+            async with connection.begin():
+                await connection.execute(
+                    text("select app_execute_erasure(:id)"), {"id": unknown}
+                )
+        assert "permission denied for function app_execute_erasure" in str(denied.value)
+
+    erasure_url = make_url(required_url("TEST_DATABASE_URL")).set(
+        username="bluelab_erasure"
+    )
+    erasure_engine = create_async_engine(erasure_url)
+    try:
+        async with erasure_engine.connect() as connection:
+            with pytest.raises(DBAPIError) as accepted:
+                async with connection.begin():
+                    await connection.execute(
+                        text("select app_execute_erasure(:id)"), {"id": unknown}
+                    )
+            assert "unknown erasure request" in str(accepted.value)
+    finally:
+        await erasure_engine.dispose()
 
 
 # ── trg_decision_freeze ──────────────────────────────────────────────────────

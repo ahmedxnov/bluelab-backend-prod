@@ -7,6 +7,8 @@ from sqlalchemy import text
 
 from bluelab.calls.admission import AdmissionRequest, ParticipantKind, admit
 from bluelab.calls.interruption import Disposition, interrupt
+from bluelab.platform.db.privileged import system_scope
+from bluelab.platform.db.scope import apply_scope
 from bluelab.platform.errors.denial import ProblemError
 from bluelab.platform.ids import new_id
 
@@ -36,11 +38,13 @@ async def test_second_interruption_consumes_stage_and_progresses_idempotently(se
     for stage_id, drill_id in stages:
         request = AdmissionRequest(kind=ParticipantKind.CANDIDATE, org_id=base_org["org"], team_id=base_org["manager"], drill_id=drill_id, candidate_id=candidate, assessment_stage_id=stage_id)
         async with session.begin():
+            await apply_scope(session, system_scope(org_id=base_org["org"]))
             first = await admit(session, request, consent_version="v1")
             assert first.restart is False
         async with session.begin():
             assert await interrupt(session, attempt_id=first.attempt_id, drill_id=drill_id, rep_account_id=None, disposition=Disposition.GRACE_EXCEEDED, candidate_id=candidate, org_id=base_org["org"], team_id=base_org["manager"])
         async with session.begin():
+            await apply_scope(session, system_scope(org_id=base_org["org"]))
             restart = await admit(session, request, consent_version="v1")
             assert restart.restart is True
         async with session.begin():
@@ -57,6 +61,7 @@ async def test_second_interruption_consumes_stage_and_progresses_idempotently(se
     first_stage, first_drill = stages[0]
     with pytest.raises(ProblemError) as caught:
         async with session.begin():
+            await apply_scope(session, system_scope(org_id=base_org["org"]))
             await admit(session, AdmissionRequest(kind=ParticipantKind.CANDIDATE, org_id=base_org["org"], team_id=base_org["manager"], drill_id=first_drill, candidate_id=candidate, assessment_stage_id=first_stage), consent_version="v1")
     assert caught.value.problem.slug == "stage-consumed"
 
@@ -72,6 +77,7 @@ async def test_never_established_deletes_attempt_and_reverses_allowance(session,
           values(:id,:org,:team,:drill,current_date,1,:team)"""), {"id":assignment,"org":base_org["org"],"team":base_org["manager"],"drill":drill})
         await session.execute(text("insert into assignment_recipient(assignment_id,org_id,team_id,rep_account_id) values(:id,:org,:team,:rep)"), {"id":assignment,"org":base_org["org"],"team":base_org["manager"],"rep":rep})
     async with session.begin():
+        await apply_scope(session, system_scope(org_id=base_org["org"]))
         admitted = await admit(session, AdmissionRequest(kind=ParticipantKind.REP, org_id=base_org["org"], team_id=base_org["manager"], drill_id=drill, account_id=rep), consent_version="v1")
     async with session.begin():
         assert await interrupt(session, attempt_id=admitted.attempt_id, drill_id=drill, rep_account_id=rep, disposition=Disposition.NEVER_ESTABLISHED)

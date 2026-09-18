@@ -1,6 +1,7 @@
 """The ordinary transaction boundary follows the current organization term."""
 
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 import pytest
 from sqlalchemy import text
@@ -22,6 +23,7 @@ from bluelab.platform.queue.context import OrganizationWorkSuspended, job_transa
 pytestmark = [pytest.mark.l3_integration, pytest.mark.l7_security]
 
 
+@pytest.mark.verifies("SEC-042")
 async def test_term_and_pending_decision_fence_ordinary_transactions(auth_engine, world) -> None:
     scope = ScopeContext.account(
         org_id=world.org, team_id=world.manager, account_id=world.rep, role=Role.REP
@@ -99,6 +101,10 @@ async def test_term_and_pending_decision_fence_ordinary_transactions(auth_engine
         )
     async with scoped_transaction(scope) as db:
         assert await db.scalar(text("select 1")) == 1
+        await require_call_service_access(db, world.org)
+        with pytest.raises(ProblemError) as wrong_org:
+            await require_call_service_access(db, new_id())
+        assert wrong_org.value.problem is catalog.ORGANIZATION_SUSPENDED
     async with job_transaction(Lane.DISPATCH_EMAIL, ordinary_job, job_id="test") as (db, _):
         assert await db.scalar(text("select 1")) == 1
     async with scoped_transaction(system_scope(org_id=world.org)) as db:
@@ -123,6 +129,11 @@ async def test_term_and_pending_decision_fence_ordinary_transactions(auth_engine
         with pytest.raises(ProblemError) as call_pending:
             await require_call_service_access(db, world.org)
     assert call_pending.value.problem is catalog.ORGANIZATION_SUSPENDED
+    async with async_sessionmaker(auth_engine)() as db, db.begin():
+        await db.execute(
+            text("delete from org_lifecycle_operation where id=:id"),
+            {"id": operation_id},
+        )
 
 
 async def test_maintenance_helpers_refuse_ordinary_and_org_scoped_callers(world) -> None:
@@ -132,3 +143,17 @@ async def test_maintenance_helpers_refuse_ordinary_and_org_scoped_callers(world)
     with pytest.raises(DBAPIError):
         async with scoped_transaction(system_scope(org_id=world.org)) as db:
             await db.execute(text("select org_id from app_due_org_service_terms(now(), 10)"))
+
+
+async def test_maintenance_guc_spoofing_cannot_invoke_global_definers() -> None:
+    """The API role cannot borrow a worker's global maintenance authority."""
+    for statement in (
+        "select app_retention_sweep('RC-3', now())",
+        "select app_stale_pending_recordings(now())",
+        "select org_id from app_due_org_service_terms(now(), 10)",
+        "select org_id from app_pending_org_term_operations(10)",
+    ):
+        with pytest.raises(DBAPIError) as denied:
+            async with scoped_transaction(system_scope(org_id=UUID(int=0))) as db:
+                await db.execute(text(statement))
+        assert "permission denied for function" in str(denied.value)

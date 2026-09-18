@@ -17,6 +17,39 @@ checking before first real use.
 
 ## CI defects
 
+### OI-22 · Phase 9 lifecycle enablement
+**Status:** open in Phase 9
+
+Automatic organization purge remains disabled. Offboarding,
+restriction-release, request-state, and purge-evidence HTTP paths are served.
+The bounded purge executor, independent manifests, and restore replay path run
+in the local PostgreSQL test environment. The enablement restore drills across
+the supported backup and object recovery sources remain unverified.
+The conformance gate serves all 99 operations. Executed PostgreSQL and unit
+assertions cover FR-IDA-015/016, FR-LIV-017, and SEC-042/043; the requirement
+ratchet holds at 118 of 190 with 72 previously tracked gaps. Local backend and
+frontend release gates and container builds pass.
+
+The restore entrypoint requires isolated access, verifies the independent
+catalog and receipts, replays rollback-lost lifecycle and bounded purge steps,
+then reconciles subject markers and owned objects. Its local rollback test
+covers claim, batch retry, completed purge, and restored export objects. The
+data/05 §4 drill matrix, including term/restriction rollback and issued-URL
+isolation, still needs execution against the configured recovery sources.
+
+The local LiveKit 1.13.7 provider test proves room deletion, active-egress stop,
+T-6 interruption, recording-status reconciliation, and exact-key object removal.
+Its browser test demonstrates that a self-hosted server accepts the original
+60-second grant 62 seconds after issuance following room deletion. The backend
+now pins a per-participant revocation cutoff before deleting rooms when the
+configured provider supports it, including grants without established rooms.
+Self-hosted cleanup fails closed because it cannot certify token revocation.
+The Cloud browser journey and full backend cutoff require a LiveKit Cloud test
+project and a disposable provider-reachable S3 bucket to verify immediate
+reconnection refusal and capture reconciliation end to end.
+
+---
+
 ### OI-21 · Backend GitHub Actions gate
 **Status:** closed 2026-09-11 · **Raised:** Phase 1 Tasks 16–19 runner verification, 2026-09-06 · **Evidence:** [run 34564781218](https://github.com/ahmedxnov/bluelab-backend-prod/actions/runs/34564781218)
 

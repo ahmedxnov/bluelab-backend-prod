@@ -169,9 +169,9 @@ And independent completion evidence is durable before the run reports `completed
 And the organization row may be absent while its historical evidence remains readable to authorized operations.
 
 ### AC-IDA-017: Subject rights hold required source data
-Given an accepted subject-rights request that needs source data during an offboarding hold or purge
-When the request is accepted or awaits requester input
-Then an applicable restriction serializes with claim and destructive authorization
+Given an accepted subject-rights request that needs source data, including one accepted before offboarding
+When an offboarding episode is recorded, purge claim is attempted, or the request awaits requester input
+Then its organization-scoped restriction remains applicable across episodes and serializes with claim and destructive authorization
 And its 30-day response deadline does not automatically release the restriction
 And a request after completion receives only the outcome supported by retained evidence.
 

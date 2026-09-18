@@ -29,7 +29,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: bluelab
       POSTGRES_DB: bluelab
-    ports: ["5432:5432"]
+    ports: ["${BLUELAB_POSTGRES_PORT:-5432}:5432"]
     volumes:
       - "pgdata:/var/lib/postgresql/data"
       - "./sql/roles/bootstrap.sql:/docker-entrypoint-initdb.d/10-bluelab-roles.sql:ro"
@@ -51,7 +51,7 @@ services:
       retries: 20
 
   minio:
-    image: minio/minio
+    image: quay.io/minio/minio
     # C-11 object store, local implementation. The S3 API is the contract; the
     # implementation is configuration (ADR-0025).
     command: server /data --console-address ":9001"
@@ -85,6 +85,7 @@ services:
         mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-local
         mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-lifecycle-history
         mc --config-dir /tmp/.mc version enable local/bluelab-lifecycle-history
+        mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-lifecycle-history-backup
         mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-erasure-ledger
         mc --config-dir /tmp/.mc mb --ignore-existing local/bluelab-erasure-ledger-backup
     read_only: true
@@ -171,7 +172,8 @@ services:
       BLUELAB_PLANE: worker
       BLUELAB_ENV: local
       TZ: Etc/UTC
-      DATABASE_URL: postgresql+asyncpg://bluelab_app:bluelab@postgres:5432/bluelab # pragma: allowlist secret -- disposable local Compose credential
+      WORKER_QUEUES: dispatch_email,maintenance
+      DATABASE_URL: postgresql+asyncpg://bluelab_maintenance:bluelab@postgres:5432/bluelab # pragma: allowlist secret -- disposable local Compose credential
       VALKEY_URL: redis://valkey:6379/0
       OBJECT_STORE_ENDPOINT: http://minio:9000
       SMTP_URL: smtp://mailpit:1025
@@ -182,6 +184,66 @@ services:
       timeout: 3s
       start_period: 20s
       retries: 3
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=1g,mode=1777"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    stop_grace_period: 30s
+
+  export-worker:
+    image: bluelab-backend:local
+    profiles: ["runtime"]
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    environment:
+      BLUELAB_PLANE: worker
+      BLUELAB_ENV: local
+      TZ: Etc/UTC
+      WORKER_QUEUES: execute_export
+      DATABASE_URL: postgresql+asyncpg://bluelab_app:bluelab@postgres:5432/bluelab # pragma: allowlist secret -- disposable local Compose credential
+      VALKEY_URL: redis://valkey:6379/0
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+    command: ["python", "-m", "bluelab.entrypoints.worker"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=1g,mode=1777"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    init: true
+    stop_grace_period: 30s
+
+  erasure-worker:
+    image: bluelab-backend:local
+    profiles: ["runtime"]
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+    environment:
+      BLUELAB_PLANE: worker
+      BLUELAB_ENV: local
+      TZ: Etc/UTC
+      WORKER_QUEUES: execute_erasure
+      DATABASE_URL: postgresql+asyncpg://bluelab_erasure:bluelab@postgres:5432/bluelab # pragma: allowlist secret -- disposable local Compose credential
+      VALKEY_URL: redis://valkey:6379/0
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+    command: ["python", "-m", "bluelab.entrypoints.worker"]
     user: "10001:10001"
     read_only: true
     tmpfs: ["/tmp:size=1g,mode=1777"]

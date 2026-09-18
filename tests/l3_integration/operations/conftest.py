@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from tests.support import required_url
 
+from bluelab.adapters.lifecycle_history import HistoryConflict, LifecycleHistory
 from bluelab.adapters.secrets import LocalAeadCipher, OpsTotpContext
 from bluelab.platform.config import Settings
 from bluelab.platform.ids import new_id
@@ -104,6 +105,27 @@ async def ops_world(operations_engine) -> AsyncIterator[OpsWorld]:
         )
         if org_ids:
             await db.execute(
+                text("delete from org_purge_step where purge_run_id in "
+                     "(select id from org_purge_run where org_id = any(:org_ids))"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
+                text("delete from org_purge_run where org_id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
+                text("delete from org_deletion_restriction where org_id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
+                text("delete from erasure_request where org_id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
+                text("delete from export_request where org_id = any(:org_ids)"),
+                {"org_ids": org_ids},
+            )
+            await db.execute(
                 text("update org set current_service_term_id=null, service_starts_at=null, "
                      "service_ends_at=null, lifecycle_status='active', offboarding_id=null, "
                      "offboarding_started_at=null, offboarding_started_by=null, "
@@ -171,11 +193,34 @@ async def ops_world(operations_engine) -> AsyncIterator[OpsWorld]:
 
 
 @pytest_asyncio.fixture
-async def ops_client(ops_world) -> AsyncIterator[AsyncClient]:
+async def ops_client(ops_world, monkeypatch) -> AsyncIterator[AsyncClient]:
+    from bluelab.api import ops_v1
     from bluelab.entrypoints.api import create_app
     from bluelab.platform.config import get_settings
 
     settings = ops_settings()
+    class _MemoryHistoryStore:
+        def __init__(self) -> None:
+            self.items: dict[str, tuple[bytes, str]] = {}
+            self.version = 0
+
+        async def read(self, key: str) -> tuple[bytes, str] | None:
+            return self.items.get(key)
+
+        async def list_keys(self, prefix: str) -> list[str]:
+            return sorted(key for key in self.items if key.startswith(prefix))
+
+        async def put(self, key: str, body: bytes, *, expected_etag: str | None) -> None:
+            current = self.items.get(key)
+            if (current is None and expected_etag is not None) or (
+                current is not None and current[1] != expected_etag
+            ):
+                raise HistoryConflict("conditional write rejected")
+            self.version += 1
+            self.items[key] = (body, str(self.version))
+
+    history = LifecycleHistory(_MemoryHistoryStore())
+    monkeypatch.setattr(ops_v1, "create_lifecycle_history", lambda _settings: history)
     app = create_app(settings)
     app.dependency_overrides[get_settings] = lambda: settings
     app.state.valkey = fakeredis.aioredis.FakeRedis(decode_responses=True)

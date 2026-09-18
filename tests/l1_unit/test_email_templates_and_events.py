@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.x509.oid import NameOID
 
+from bluelab.adapters.email import validate_address
 from bluelab.adapters.email_events import (
     DeliveryState,
     InvalidDeliveryEvent,
@@ -29,6 +30,22 @@ CERT_URL = (
     "https://sns.eu-south-1.amazonaws.com/"
     "SimpleNotificationService-testcertificate.pem"
 )
+
+
+def test_validate_address_accepts_one_bare_mailbox_and_rejects_ambiguous_forms():
+    """The mail transport accepts no display name, list, or malformed mailbox."""
+    assert validate_address("person@example.com") == "person@example.com"
+
+    for value in (
+        "Person <person@example.com>",
+        "person@example.com,other@example.com",
+        "person@@example.com",
+        "person @example.com",
+        "person@example.com (comment)",
+        "person@example.com\nBcc: other@example.com",
+    ):
+        with pytest.raises(ValueError):
+            validate_address(value)
 
 
 def _certificate():

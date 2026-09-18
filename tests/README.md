@@ -1,5 +1,22 @@
 # Tests
 
+## Phase 9 LiveKit Cloud cutoff
+
+The provider test uses a disposable LiveKit Cloud project configured through
+`LIVEKIT_PROVIDER_TEST_URL`, `LIVEKIT_PROVIDER_TEST_KEY`,
+`LIVEKIT_PROVIDER_TEST_SECRET`, and
+`LIVEKIT_PROVIDER_TEST_CLOUD_REVOCATION=true`. Capture reconciliation also uses
+a provider-reachable BlueLab test-environment application bucket configured through
+`LIVEKIT_PROVIDER_TEST_S3_ENDPOINT`, `LIVEKIT_PROVIDER_TEST_S3_BUCKET`,
+`LIVEKIT_PROVIDER_TEST_S3_REGION`, `LIVEKIT_PROVIDER_TEST_S3_ACCESS_KEY`, and
+`LIVEKIT_PROVIDER_TEST_S3_SECRET_KEY`. With a Cloud provider URL selected, the
+tests fail when required credentials or storage settings are missing. Run the
+provider room checks in
+`tests/l3_integration/calls/test_livekit_cutoff_provider.py` and the database,
+egress, and exact-key object check in
+`tests/l3_integration/transactions/test_livekit_capture_cutoff.py` against the
+disposable PostgreSQL test database.
+
 The levels, the bars, and where each blocks are quality/01. This repository owns
 the levels that do not need a browser fleet or real vendor minutes:
 

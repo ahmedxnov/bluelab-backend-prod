@@ -24,7 +24,7 @@
 create or replace function fn_drill_freeze() returns trigger
 language plpgsql as $$
 begin
-    if app_in_erasure_context() then
+    if app_in_erasure_context() or app_in_purge_context() then
         return new;
     end if;
     if old.status not in ('published', 'archived') then

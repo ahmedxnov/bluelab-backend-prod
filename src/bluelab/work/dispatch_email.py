@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bluelab.adapters.email import EmailTransport, create_email_transport
-from bluelab.adapters.object_store import create_object_store
+from bluelab.adapters.object_store import ObjectStore, create_object_store
 from bluelab.adapters.secrets import (
     SecretUnsealer,
     create_delivery_unsealer,
@@ -33,7 +33,7 @@ def registration(
     """Bind configured capabilities once for the life of the worker process."""
     resolved_transport = transport or create_email_transport(settings)
     resolved_unsealer = unsealer or create_delivery_unsealer(settings)
-    resolved_object_store = create_object_store(settings)
+    resolved_object_store: ObjectStore | None = None
 
     async def resolve_recipient(
         session: AsyncSession, *, account_id: UUID, org_id: UUID
@@ -43,6 +43,7 @@ def registration(
         )
 
     async def handle(session: AsyncSession, job: JobEnvelope) -> None:
+        nonlocal resolved_object_store
         email_send_id = UUID(str(job.args["email_send_id"]))
         try:
             kind = (await session.execute(text("select kind from email_send where id=:id"), {"id": email_send_id})).scalar_one_or_none()
@@ -51,6 +52,8 @@ def registration(
             elif kind == "E2_invite":
                 await dispatcher.dispatch_e2(session, email_send_id=email_send_id, unsealer=resolved_unsealer, transport=resolved_transport, sender=str(settings.email_sender), public_app_url=settings.public_app_url)
             elif kind in {"E3_candidate_report", "E4_shortlist", "E5_completion"}:
+                if resolved_object_store is None:
+                    resolved_object_store = create_object_store(settings)
                 await dispatcher.dispatch_e3_or_e4(session, email_send_id=email_send_id, transport=resolved_transport, sender=str(settings.email_sender), object_store=resolved_object_store, public_app_url=settings.public_app_url)
             elif kind is not None:
                 raise dispatcher.TerminalDispatchError("email kind has no dispatcher")

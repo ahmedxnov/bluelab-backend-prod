@@ -49,6 +49,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bluelab.platform.db.session import org_service_access_allowed
 from bluelab.platform.errors import catalog
 from bluelab.platform.errors.denial import ProblemError
 from bluelab.platform.ids import new_id
@@ -142,26 +143,14 @@ _INSERT_ATTEMPT = text(
     """
 )
 
-_ORG_CALL_ACCESS = text(
-    "select o.lifecycle_status, o.service_term_enforced, o.service_starts_at, "
-    "o.service_ends_at, clock_timestamp() as checked_at, "
-    "exists(select 1 from org_lifecycle_operation p where p.org_id=o.id "
-    "and p.status='pending') as pending "
-    "from org o where o.id=:org for share"
-)
-
-
 async def require_call_service_access(session: AsyncSession, org_id: UUID) -> None:
     """Fence the system-scoped internal call seam at the current service instant."""
-    state = (await session.execute(_ORG_CALL_ACCESS, {"org": org_id})).one_or_none()
-    if state is None or state.lifecycle_status != "active" or state.pending:
-        raise ProblemError(catalog.ORGANIZATION_SUSPENDED)
-    if state.service_term_enforced and (
-        state.service_starts_at is None
-        or state.service_ends_at is None
-        or state.checked_at < state.service_starts_at
-        or state.checked_at >= state.service_ends_at
-    ):
+    # The scoped definer check takes the org SHARE lock. A direct SELECT FOR SHARE
+    # under an account principal requires an UPDATE RLS policy and masks the row.
+    scoped_org = await session.scalar(text(
+        "select nullif(current_setting('app.org_id',true),'')::uuid"
+    ))
+    if scoped_org != org_id or not await org_service_access_allowed(session):
         raise ProblemError(catalog.ORGANIZATION_SUSPENDED)
 
 
@@ -214,10 +203,19 @@ async def admit(
     if request.kind is ParticipantKind.REP and not request.self_authored:
         # Self-authored practice has no assignment and therefore no allowance
         # (FR-TRP-009); an author testing their own drill is unmetered.
-        consumed = await session.execute(
-            _CONSUME_ALLOWANCE, {"drill": request.drill_id, "rep": request.account_id}
-        )
-        if consumed.rowcount == 0:  # type: ignore[attr-defined]  # SQLAlchemy types async execute() as Result[Any]; the UPDATE it returns is a CursorResult at runtime
+        principal_kind = await session.scalar(text(
+            "select nullif(current_setting('app.principal_kind',true),'')"
+        ))
+        if principal_kind == "account":
+            consumed = bool((await session.execute(text(
+                "select app_consume_assignment_allowance(:drill,:rep)"
+            ), {"drill": request.drill_id, "rep": request.account_id})).scalar_one())
+        else:
+            result = await session.execute(
+                _CONSUME_ALLOWANCE, {"drill": request.drill_id, "rep": request.account_id}
+            )
+            consumed = result.rowcount != 0  # type: ignore[attr-defined]
+        if not consumed:
             # Zero rows IS the refusal. Reading the counter and then writing it
             # would let two tabs both pass the read and both consume the last
             # attempt; the conditional update cannot.
@@ -270,6 +268,12 @@ async def has_current_consent(
     """Check exactly one subject against the current recording notice."""
     if (account_id is None) == (candidate_id is None):
         return False
+    if account_id is not None:
+        # Consent evidence is intentionally hidden from account RLS. The
+        # enumerated definer returns only the account's accepted-version bit.
+        return bool((await session.execute(text(
+            "select app_account_has_accepted(:account,'recording_consent_notice',:version)"
+        ), {"account": account_id, "version": consent_version})).scalar_one())
     return bool(
         (
             await session.execute(

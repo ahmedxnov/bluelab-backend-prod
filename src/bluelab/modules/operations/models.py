@@ -22,7 +22,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, LargeBinary, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from bluelab.platform.db.base import Base, Timestamped, UUIDPrimaryKey, enum_check
@@ -237,12 +245,145 @@ class OrgLifecycleOperation(UUIDPrimaryKey, Timestamped, Base):
             "action",
             (
                 "confirm_term", "renew_term", "expire_term", "start", "cancel", "extend",
-                "policy_revision", "create_restriction", "release_restriction", "claim",
-                "authorize_destructive_step", "complete", "record_post_completion_restriction",
+                "policy_revision", "create_restriction", "release_restriction",
+                "set_subject_request_state", "claim",
+                "authorize_destructive_step", "complete_destructive_step", "complete",
+                "record_post_completion_restriction",
             ),
+        ),
+        CheckConstraint(
+            "(action in ('confirm_term','policy_revision') and offboarding_id is null) "
+            "or (action in ('create_restriction','release_restriction',"
+            "'set_subject_request_state') "
+            "and restriction_id is not null) "
+            "or action='renew_term' "
+            "or (action='expire_term' and offboarding_id is not null) "
+            "or (action not in ('confirm_term','renew_term','expire_term',"
+            "'policy_revision','create_restriction','release_restriction',"
+            "'set_subject_request_state') "
+            "and offboarding_id is not null)",
+            name="org_lifecycle_operation_action_scope",
         ),
         Index(
             "uq_org_lifecycle_pending", "org_id", unique=True,
             postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
+
+class OrgDeletionRestriction(UUIDPrimaryKey, Base):
+    """Organization-wide purge barrier retained across terms and episodes."""
+
+    __tablename__ = "org_deletion_restriction"
+
+    org_id: Mapped[UUID] = mapped_column(nullable=False)
+    offboarding_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    scope: Mapped[str] = mapped_column(nullable=False)
+    reason: Mapped[str] = mapped_column(nullable=False)
+    authority_ref: Mapped[str] = mapped_column(nullable=False)
+    release_condition: Mapped[str] = mapped_column(nullable=False)
+    related_request_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(nullable=False, server_default=text("'active'"))
+    created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
+    released_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    released_by: Mapped[UUID | None] = mapped_column(ForeignKey("ops_account.id"), nullable=True)
+    release_reason: Mapped[str | None] = mapped_column(nullable=True)
+    release_evidence_reference: Mapped[str | None] = mapped_column(nullable=True)
+
+    __table_args__ = (
+        enum_check("status", ("active", "released")),
+        CheckConstraint(
+            "(status='active' and released_at is null and release_reason is null "
+            "and release_evidence_reference is null) or "
+            "(status='released' and released_at is not null and release_reason is not null "
+            "and release_evidence_reference is not null)",
+            name="org_deletion_restriction_resolution",
+        ),
+        Index(
+            "idx_org_deletion_restriction_active", "org_id", "id",
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index(
+            "uq_org_deletion_restriction_request", "org_id", "related_request_id",
+            unique=True, postgresql_where=text("related_request_id is not null"),
+        ),
+    )
+
+
+class OrgPurgeRun(UUIDPrimaryKey, Timestamped, Base):
+    """Retained organization purge projection keyed by one episode."""
+
+    __tablename__ = "org_purge_run"
+
+    org_id: Mapped[UUID] = mapped_column(nullable=False)
+    service_term_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    offboarding_id: Mapped[UUID] = mapped_column(nullable=False, unique=True)
+    initiating_operator_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("ops_account.id"), nullable=True)
+    offboarding_started_at: Mapped[datetime] = mapped_column(nullable=False)
+    purge_eligible_at: Mapped[datetime] = mapped_column(nullable=False)
+    retention_policy_reference: Mapped[str] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(nullable=False, server_default=text("'pending'"))
+    execution_epoch: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0"))
+    purge_started_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    deletion_rule_version: Mapped[str | None] = mapped_column(nullable=True)
+    inventory_manifest_key: Mapped[str | None] = mapped_column(nullable=True)
+    inventory_manifest_digest: Mapped[str | None] = mapped_column(nullable=True)
+    verification_summary: Mapped[dict[str, Any]] = mapped_column(
+        SNAPSHOT_TYPE, nullable=False, server_default=text("'{}'"))
+    last_failure_class: Mapped[str | None] = mapped_column(nullable=True)
+    failure_count: Mapped[int] = mapped_column(nullable=False, server_default=text("0"))
+    retry_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_progress_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    __table_args__ = (
+        enum_check("status", (
+            "pending", "running", "paused_restriction", "retry_pending",
+            "needs_attention", "completed",
+        )),
+        CheckConstraint("execution_epoch >= 0", name="org_purge_run_epoch"),
+        CheckConstraint(
+            "(status='completed' and completed_at is not null) or "
+            "(status<>'completed' and completed_at is null)",
+            name="org_purge_run_completion",
+        ),
+    )
+
+
+class OrgPurgeStep(UUIDPrimaryKey, Base):
+    """One bounded deletion batch authorization and its outcome."""
+
+    __tablename__ = "org_purge_step"
+
+    purge_run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("org_purge_run.id"), nullable=False)
+    step_key: Mapped[str] = mapped_column(nullable=False)
+    batch_key: Mapped[str] = mapped_column(nullable=False)
+    batch_manifest_key: Mapped[str] = mapped_column(nullable=False)
+    batch_manifest_digest: Mapped[str] = mapped_column(nullable=False)
+    target_table: Mapped[str | None] = mapped_column(nullable=True)
+    batch_keys: Mapped[list[dict[str, Any]]] = mapped_column(
+        SNAPSHOT_TYPE, nullable=False, server_default=text("'[]'")
+    )
+    status: Mapped[str] = mapped_column(nullable=False)
+    execution_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    authorized_at: Mapped[datetime] = mapped_column(nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    deleted_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0"))
+    failure_class: Mapped[str | None] = mapped_column(nullable=True)
+
+    __table_args__ = (
+        enum_check("status", ("authorized", "completed", "failed")),
+        UniqueConstraint("purge_run_id", "step_key", "batch_key"),
+        CheckConstraint("execution_epoch >= 0", name="org_purge_step_epoch"),
+        CheckConstraint("deleted_count >= 0", name="org_purge_step_count"),
+        CheckConstraint(
+            "(status='completed' and completed_at is not null and failure_class is null) "
+            "or (status='failed' and failure_class is not null) "
+            "or (status='authorized' and completed_at is null and failure_class is null)",
+            name="org_purge_step_completion",
         ),
     )

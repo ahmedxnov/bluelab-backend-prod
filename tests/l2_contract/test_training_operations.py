@@ -182,9 +182,7 @@ def _free_port() -> int:
 
 def _prism_command(port: int) -> list[str]:
     """Build the platform-native command for the pinned local Prism binary."""
-    executable = REPO_ROOT / "node_modules" / ".bin" / (
-        "prism.cmd" if os.name == "nt" else "prism"
-    )
+    executable = REPO_ROOT / "node_modules" / ".bin" / "prism"
     if not executable.is_file():
         pytest.fail("Prism is not installed; run `npm ci` before the L2 contract suite.")
     arguments = [
@@ -195,9 +193,14 @@ def _prism_command(port: int) -> list[str]:
         "127.0.0.1",
         "--port",
         str(port),
+        "--verboseLevel",
+        "warn",
     ]
     if os.name == "nt":
-        return ["cmd.exe", "/d", "/s", "/c", str(executable), *arguments]
+        prism_entry = REPO_ROOT / "node_modules" / "@stoplight" / "prism-cli" / "dist" / "index.js"
+        if not prism_entry.is_file():
+            pytest.fail("Prism is incomplete; run `npm ci` before the L2 contract suite.")
+        return ["node", str(prism_entry), *arguments]
     return [str(executable), *arguments]
 
 
